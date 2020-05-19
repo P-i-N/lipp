@@ -1,12 +1,28 @@
 #pragma once
 
+#if !defined(LIPP_NOEXCEPT)
+	#define LIPP_NOEXCEPT noexcept
+#endif
+
+#if !defined(LIPP_SPRINTF)
+	#if defined(_MSC_VER)
+		#define LIPP_SPRINTF(...) sprintf_s( __VA_ARGS__ );
+	#else
+		#define LIPP_SPRINTF(...) sprintf( __VA_ARGS__ );
+	#endif
+#endif
+
 #if !defined(LIPP_USE_CUSTOM_TYPES)
 #include <string>
 #include <vector>
+#include <fstream>
+
 namespace lipp {
-using string_t = std::string;
-using string_view_t = std::string_view;
-template <typename T> using vector_t = std::vector<T>;
+
+//using string_t = std::string;
+//using string_view_t = std::string_view;
+//template <typename T> using vector_t = std::vector<T>;
+
 } // namespace lipp
 #else
 /* Typedef your custom types with STL-like interfaces */
@@ -16,48 +32,93 @@ template <typename T> using vector_t = std::vector<T>;
 
 namespace lipp {
 
+struct error
+{
+	enum
+	{
+		none,
+	};
+
+	int type = none;
+	int line = 0;
+	int column = 0;
+
+	operator int() const LIPP_NOEXCEPT { return type; }
+};
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+template <class String, class StringView, template <class> class Vector>
+struct preprocessor_traits
+{
+	using string_t = String;
+	using string_view_t = StringView;
+	template <typename T> using vector_t = Vector<T>;
+
+	static constexpr bool keep_defines = true;
+	static constexpr bool keep_undefs = true;
+	static constexpr int initial_line_number = 1;
+
+	static constexpr char *eol = "\r\n";
+	static constexpr char path_separator = '/';
+	static constexpr bool correct_paths = true;
+
+	static constexpr size_t char_buffer_size = 256;
+
+	static size_t size( const char *str ) LIPP_NOEXCEPT { return str ? strlen( str ) : 0; }
+	static size_t size( const string_t &s ) LIPP_NOEXCEPT { return s.size(); }
+	static size_t size( const string_view_t &sv ) LIPP_NOEXCEPT { return sv.size(); }
+	static const char *data( const string_t &s ) LIPP_NOEXCEPT { return s.data(); }
+	static const char *data( const string_view_t &sv ) LIPP_NOEXCEPT { return sv.data(); }
+};
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+template <class T>
 class preprocessor
 {
 public:
-	preprocessor();
+	using traits_t = T;
+	using string_t = typename traits_t::string_t;
+	using string_view_t = typename traits_t::string_view_t;
+	template <typename U> using vector_t = typename traits_t::template vector_t<U>;
 
-	virtual ~preprocessor();
+	preprocessor() = default;
+
+	virtual ~preprocessor() = default;
 
 	virtual bool define( string_view_t name, string_view_t value );
 
-	bool define( string_view_t name ) { return define( name, string_view_t( "", 0 ) ); }
+	bool define( string_view_t name ) { return define( name, "" ); }
 
 	virtual bool undef( string_view_t name );
 
 	virtual void undef_all();
 
-	virtual const char *find_macro( string_view_t name ) const noexcept;
+	virtual const char *find_macro( string_view_t name ) const LIPP_NOEXCEPT;
 
-	struct source
-	{
-		string_t dir;
-		string_t text;
-	};
+	virtual bool include_string( string_view_t src, string_view_t sourceName ) LIPP_NOEXCEPT;
 
-	bool process( const source &src );
+	bool include_string( string_view_t src ) LIPP_NOEXCEPT { return include_string( src, "" ); }
 
-	bool process( const char *str );
+	virtual bool include_file( string_view_t fileName, bool isSystemPath ) LIPP_NOEXCEPT;
+
+	bool include_file( string_view_t fileName ) LIPP_NOEXCEPT { return include_file( fileName, false ); }
+
+	virtual void write_line( string_view_t line ) LIPP_NOEXCEPT;
+
+	virtual void write_line_directive( int lineNumber, string_view_t fileName ) LIPP_NOEXCEPT;
+
+	void write_line_directive() LIPP_NOEXCEPT { write_line_directive( _state.lineNumber, _state.sourceName ); }
 
 protected:
-	virtual string_t on_include( string_view_t fileName, bool isSystemPath );
+	static string_view_t trim( string_view_t str, bool left = true, bool right = true ) LIPP_NOEXCEPT;
 
-	virtual void on_output( string_view_t line )
-	{
-		printf( "%.*s\n", int( line.size() ), line.data() );
-	}
+	static string_view_t split_token( string_view_t &str ) LIPP_NOEXCEPT;
 
-	static string_view_t trim( string_view_t str, bool left = true, bool right = true ) noexcept;
-
-	static string_view_t split_token( string_view_t &str ) noexcept;
+	static string_view_t split_line( string_view_t &str ) LIPP_NOEXCEPT;
 
 	bool process_line( string_view_t line );
-
-	bool if_stack_result() const noexcept;
 
 	int process_directive( string_view_t dir );
 
@@ -73,27 +134,39 @@ protected:
 
 	macros_t _macros;
 
-	bool _insideCommentBlock = false;
-
-	vector_t<bool> _ifStack;
+	struct state
+	{
+		string_view_t cwd = string_view_t();
+		string_view_t sourceName = string_view_t();
+		bool insideCommentBlock = false;
+		unsigned long long ifBits = 0;
+		int lineNumber = -1;
+	} _state;
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-//---------------------------------------------------------------------------------------------------------------------
-inline preprocessor::preprocessor()
+namespace detail {
+
+template <typename T>
+class scoped_copy final
 {
+public:
+	scoped_copy( T &value ) noexcept : _value( value ), _copy( value ) { }
+	~scoped_copy() noexcept { _value = _copy; }
+	T *operator->() noexcept { return &_copy; }
 
-}
+private:
+	T &_value;
+	T _copy;
+};
+
+} // namespace detail
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 //---------------------------------------------------------------------------------------------------------------------
-inline preprocessor::~preprocessor()
-{
-
-}
-
-//---------------------------------------------------------------------------------------------------------------------
-inline bool preprocessor::define( string_view_t name, string_view_t value )
+template <class T> inline bool preprocessor<T>::define( string_view_t name, string_view_t value )
 {
 	for ( auto &m : _macros )
 	{
@@ -109,7 +182,7 @@ inline bool preprocessor::define( string_view_t name, string_view_t value )
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-inline bool preprocessor::undef( string_view_t name )
+template <class T> inline bool preprocessor<T>::undef( string_view_t name )
 {
 	for ( size_t i = 0, S = _macros.size(); i < S; ++i )
 	{
@@ -125,13 +198,13 @@ inline bool preprocessor::undef( string_view_t name )
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-inline void preprocessor::undef_all()
+template <class T> inline void preprocessor<T>::undef_all()
 {
 	_macros.clear();
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-inline const char *preprocessor::find_macro( string_view_t name ) const noexcept
+template <class T> inline const char *preprocessor<T>::find_macro( string_view_t name ) const LIPP_NOEXCEPT
 {
 	for ( const auto &m : _macros )
 		if ( m.name == name )
@@ -141,76 +214,147 @@ inline const char *preprocessor::find_macro( string_view_t name ) const noexcept
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-inline bool preprocessor::process( const source &src )
+template <class T> inline bool preprocessor<T>::include_string( string_view_t src, string_view_t sourceName ) LIPP_NOEXCEPT
 {
-	const char *str = src.text.c_str();
+	if ( !T::size( src ) )
+		return true;
 
-	while ( str )
+	detail::scoped_copy prevState = _state;
+
+	_state.sourceName = sourceName;
+	_state.lineNumber = traits_t::initial_line_number;
+
 	{
-		auto eol = strchr( str, '\n' );
-		size_t length = eol ? ( eol - str ) : strlen( str );
+		size_t slashPos = T::size( sourceName ) - 1;
+		while ( slashPos < T::size( sourceName ) && sourceName[slashPos] != '/' && sourceName[slashPos] != '\\' )
+			--slashPos;
 
-		process_line( string_view_t( str, length ) );
-
-		if ( str = eol )
-			++str;
+		if ( slashPos < T::size( sourceName ) )
+			_state.cwd = string_view_t( T::data( sourceName ), slashPos );
 	}
+
+	write_line_directive();
+
+	while ( T::size( src ) )
+	{
+		auto line = split_line( src );
+		process_line( line );
+		++_state.lineNumber;
+	}
+
+	if ( prevState->lineNumber >= traits_t::initial_line_number && _state.sourceName != prevState->sourceName )
+		write_line_directive( prevState->lineNumber, prevState->sourceName );
 
 	return true;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-inline bool preprocessor::process( const char *str )
+template <class T> inline bool preprocessor<T>::include_file( string_view_t fileName, bool isSystemPath ) LIPP_NOEXCEPT
 {
-	return process( source { ".", str } );
+	char buff[T::char_buffer_size] = { };
+
+	if ( !isSystemPath && T::size( _state.cwd ) )
+	{
+		LIPP_SPRINTF( buff, "%.*s%c%.*s",
+		              int( T::size( _state.cwd ) ),
+		              T::data( _state.cwd ),
+		              T::path_separator,
+		              int( T::size( fileName ) ),
+		              T::data( fileName ) )
+	}
+	else
+	{
+		LIPP_SPRINTF( buff, "%.*s", int( T::size( fileName ) ), T::data( fileName ) )
+	}
+
+	if ( traits_t::correct_paths )
+	{
+		const char wrongSeparator = ( traits_t::path_separator == '/' ) ? '\\' : '/';
+
+		for ( size_t i = 0, S = T::size( buff ); i < S; ++i )
+		{
+			if ( buff[i] == wrongSeparator )
+				buff[i] = traits_t::path_separator;
+		}
+	}
+
+#if !defined(LIPP_USE_CUSTOM_TYPES)
+	std::ifstream ifs( buff, std::ios_base::in | std::ios_base::binary );
+	if ( !ifs.is_open() )
+		return false;
+
+	ifs.seekg( 0, std::ios_base::end );
+	size_t len = ifs.tellg();
+	ifs.seekg( 0, std::ios_base::beg );
+
+	std::unique_ptr<char[]> data( new char[len + 1] );
+	ifs.read( data.get(), len );
+	data[len] = 0;
+
+	return include_string( string_view_t( data.get(), len ), buff );
+#else
+	// Derive from 'lipp::preprocessor` and use your own implementation...
+	return false;
+#endif
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-inline string_t preprocessor::on_include( string_view_t fileName, bool isSystemPath )
+template <class T> inline void preprocessor<T>::write_line( string_view_t line ) LIPP_NOEXCEPT
 {
-	string_t result = "";
-
-
-	return result;
+#if !defined(LIPP_USE_CUSTOM_TYPES)
+	printf( "%.*s%s", int( T::size( line ) ), T::data( line ), T::eol );
+#endif
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-inline string_view_t preprocessor::trim( string_view_t str, bool left, bool right ) noexcept
+template <class T> inline void preprocessor<T>::write_line_directive( int lineNumber, string_view_t fileName ) LIPP_NOEXCEPT
+{
+	char buff[T::char_buffer_size] = { };
+	LIPP_SPRINTF( buff, "#line %d \"%.*s\"",
+	              lineNumber,
+	              int( T::size( fileName ) ),
+	              T::data( fileName ) )
+
+	write_line( string_view_t( buff, T::size( buff ) ) );
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+template <class T> inline typename T::string_view_t preprocessor<T>::trim( string_view_t str, bool left, bool right ) LIPP_NOEXCEPT
 {
 	size_t start = 0;
-	size_t end = str.size();
+	size_t end = T::size( str );
 
 	if ( left )
 	{
-		while ( start < str.size() && isspace( str.data()[start] ) )
+		while ( start < end && isspace( str[start] ) )
 			++start;
 	}
 
 	if ( right )
 	{
-		while ( end > start && isspace( str.data()[end - 1] ) )
+		while ( end > start && isspace( str[end - 1] ) )
 			--end;
 	}
 
-	return string_view_t( str.data() + start, end - start );
+	return string_view_t( T::data( str ) + start, end - start );
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-inline string_view_t preprocessor::split_token( string_view_t &str ) noexcept
+template <class T> inline typename T::string_view_t preprocessor<T>::split_token( string_view_t &str ) LIPP_NOEXCEPT
 {
 	str = trim( str, true, false );
 
-	if ( !str.size() )
-		return string_view_t();
+	if ( !T::size( str ) )
+		return traits_t::string_view_t();
 
 	static constexpr char *alphaNumChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._";
 
-	char firstChar = *str.data();
+	char firstChar = *T::data( str );
 	size_t length = 0;
 
 	if ( strchr( alphaNumChars, firstChar ) )
 	{
-		while ( strchr( alphaNumChars, str.data()[length] ) )
+		while ( strchr( alphaNumChars, str[length] ) )
 			++length;
 	}
 	else if ( strchr( "'\"", firstChar ) )
@@ -222,29 +366,49 @@ inline string_view_t preprocessor::split_token( string_view_t &str ) noexcept
 
 	}
 
-	auto result = string_view_t( str.data(), length );
-	str = string_view_t( str.data() + length, str.size() - length );
+	auto result = string_view_t( T::data( str ), length );
+	str = string_view_t( T::data( str ) + length, T::size( str ) - length );
 	return result;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-inline bool preprocessor::process_line( string_view_t line )
+template <class T> inline typename T::string_view_t preprocessor<T>::split_line( string_view_t &str ) LIPP_NOEXCEPT
+{
+	if ( !T::size( str ) )
+		return string_view_t();
+
+	size_t length = 0;
+
+	while ( length < T::size( str ) && str[length] != '\n' )
+		++length;
+
+	auto result = string_view_t( T::data( str ), length );
+
+	if ( length < T::size( str ) )
+		++length;
+
+	str = string_view_t( T::data( str ) + length, T::size( str ) - length );
+	return result;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+template <class T> inline bool preprocessor<T>::process_line( string_view_t line )
 {
 	bool shouldOutput = true;
 	size_t directivePos( -1 );
 
 	char ch = 0, lastCh = 0;
-	for ( size_t i = 0; i < line.size(); ++i, lastCh = ch )
+	for ( size_t i = 0; i < T::size( line ); ++i, lastCh = ch )
 	{
-		ch = line.data()[i];
+		ch = line[i];
 		if ( isspace( ch ) )
 			continue;
 
-		if ( _insideCommentBlock )
+		if ( _state.insideCommentBlock )
 		{
 			// End of comment block?
 			if ( ch == '/' && lastCh == '*' )
-				_insideCommentBlock = false;
+				_state.insideCommentBlock = false;
 			else
 				continue;
 		}
@@ -252,7 +416,7 @@ inline bool preprocessor::process_line( string_view_t line )
 		// Start of comment block
 		/**/ if ( ch == '*' && lastCh == '/' )
 		{
-			_insideCommentBlock = true;
+			_state.insideCommentBlock = true;
 		}
 		// Line comment
 		else if ( ch == '/' && lastCh == '/' )
@@ -266,40 +430,30 @@ inline bool preprocessor::process_line( string_view_t line )
 		}
 	}
 
-	if ( directivePos < line.size() )
+	if ( directivePos < T::size( line ) )
 	{
 		++directivePos;
 
-		if ( auto err = process_directive( string_view_t( line.data() + directivePos, line.size() - directivePos ) ); err < 0 )
+		if ( auto err = process_directive( string_view_t( T::data( line ) + directivePos, T::size( line ) - directivePos ) ); err < 0 )
 			return err;
 		else
 			shouldOutput = ( err > 0 );
 	}
 
-	if ( shouldOutput && if_stack_result() )
-		on_output( line );
+	if ( shouldOutput && !( ( _state.ifBits + 1ull ) & _state.ifBits ) )
+		write_line( line );
 
 	return true;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-inline bool preprocessor::if_stack_result() const noexcept
-{
-	for ( bool i : _ifStack )
-		if ( !i )
-			return false;
-
-	return true;
-}
-
-//---------------------------------------------------------------------------------------------------------------------
-inline int preprocessor::process_directive( string_view_t dir )
+template <class T> inline int preprocessor<T>::process_directive( string_view_t dir )
 {
 	auto dirName = split_token( dir );
 
 	/**/ if ( dirName == "define" )
 	{
-		if ( auto macroName = split_token( dir ); macroName.size() )
+		if ( auto macroName = split_token( dir ); T::size( macroName ) )
 		{
 			define( macroName, split_token( dir ) );
 			return 1;
@@ -309,7 +463,7 @@ inline int preprocessor::process_directive( string_view_t dir )
 	}
 	else if ( dirName == "undef" )
 	{
-		if ( auto macroName = split_token( dir ); macroName.size() )
+		if ( auto macroName = split_token( dir ); T::size( macroName ) )
 		{
 			undef( macroName );
 			return 1;
@@ -319,33 +473,39 @@ inline int preprocessor::process_directive( string_view_t dir )
 	}
 	else if ( dirName == "ifdef" )
 	{
-		if ( auto macroName = split_token( dir ); macroName.size() )
-			_ifStack.push_back( find_macro( macroName ) != nullptr );
+		if ( auto macroName = split_token( dir ); T::size( macroName ) )
+			_state.ifBits = ( _state.ifBits << 2ull ) | ( ( find_macro( macroName ) != nullptr ) ? 0b11ull : 0b10ull );
+		else
+			return -1; // Error!
+	}
+	else if ( dirName == "ifndef" )
+	{
+		if ( auto macroName = split_token( dir ); T::size( macroName ) )
+			_state.ifBits = ( _state.ifBits << 2ull ) | ( ( find_macro( macroName ) == nullptr ) ? 0b11ull : 0b10ull );
 		else
 			return -1; // Error!
 	}
 	else if ( dirName == "else" )
 	{
-		if ( !_ifStack.size() )
+		if ( !_state.ifBits )
 			return -1;
 
-		auto lastIf = _ifStack[_ifStack.size() - 1];
-		_ifStack[_ifStack.size() - 1] = !lastIf;
+		_state.ifBits ^= 1; // Flip first bit
 	}
 	else if ( dirName == "endif" )
 	{
-		if ( !_ifStack.size() )
+		if ( !_state.ifBits )
 			return -1;
 
-		_ifStack.pop_back();
+		_state.ifBits >>= 2;
 	}
 	else if ( dirName == "include" )
 	{
-		if ( dir = trim( dir ); dir.size() < 3 )
+		if ( dir = trim( dir ); T::size( dir ) < 3 )
 			return -1;
 
-		auto firstCh = dir.data()[0];
-		auto lastCh = dir.data()[dir.size() - 1];
+		auto firstCh = dir[0];
+		auto lastCh = dir[T::size( dir ) - 1];
 		bool isSystemPath = false;
 
 		if ( ( firstCh == '"' && lastCh == '"' ) || ( firstCh == '\'' && lastCh == '\'' ) )
@@ -355,15 +515,15 @@ inline int preprocessor::process_directive( string_view_t dir )
 		else
 			return -1;
 
-		auto fileName = string_view_t( dir.data() + 1, dir.size() - 2 );
-		on_include( fileName, isSystemPath );
+		auto fileName = string_view_t( T::data( dir ) + 1, T::size( dir ) - 2 );
+		include_file( fileName, isSystemPath );
 	}
 
 	return 0; // Do not output
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-inline int preprocessor::evaluate_expression( string_view_t expr ) const
+template <class T> inline int preprocessor<T>::evaluate_expression( string_view_t expr ) const
 {
 	return 0;
 }

@@ -10,3 +10,6 @@ nulla pariatur. Excepteur sint occaecat cupidatat non proident,
 #include "include_test.txt"
 sunt in culpa qui officia deserunt mollit anim id est laborum.
 #endif
+
+One more time:
+#include "dir\another_file.txt"

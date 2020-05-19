@@ -1,1 +1,4 @@
 Hello, world!
+-------------
+
+#include "dir/another_file.txt"
