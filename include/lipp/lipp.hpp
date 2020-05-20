@@ -12,20 +12,12 @@
 	#endif
 #endif
 
-#if !defined(LIPP_USE_CUSTOM_TYPES)
-#include <string>
-#include <vector>
-#include <fstream>
-
-namespace lipp {
-
-//using string_t = std::string;
-//using string_view_t = std::string_view;
-//template <typename T> using vector_t = std::vector<T>;
-
-} // namespace lipp
+#if !defined(LIPP_DO_NOT_USE_STL)
+	#include <string>
+	#include <vector>
+	#include <fstream>
 #else
-/* Typedef your custom types with STL-like interfaces */
+	/* Typedef your custom types with STL-like interfaces */
 #endif
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -68,8 +60,34 @@ struct preprocessor_traits
 	static size_t size( const char *str ) LIPP_NOEXCEPT { return str ? strlen( str ) : 0; }
 	static size_t size( const string_t &s ) LIPP_NOEXCEPT { return s.size(); }
 	static size_t size( const string_view_t &sv ) LIPP_NOEXCEPT { return sv.size(); }
+
+	template <typename T>
+	static size_t size( const vector_t<T> &v ) LIPP_NOEXCEPT { return v.size(); }
+
 	static const char *data( const string_t &s ) LIPP_NOEXCEPT { return s.data(); }
 	static const char *data( const string_view_t &sv ) LIPP_NOEXCEPT { return sv.data(); }
+
+	template <typename T>
+	static void clear( vector_t<T> &v ) LIPP_NOEXCEPT { v.clear(); }
+
+	template <typename T>
+	static void push_back( vector_t<T> &v, const T &item ) LIPP_NOEXCEPT { v.push_back( item ); }
+
+	template <typename T>
+	static void swap_erase_at( vector_t<T> &v, size_t index ) LIPP_NOEXCEPT
+	{
+		v[index] = std::move( v.back() );
+		v.pop_back();
+	}
+
+	static bool read_file( const string_t &fileName, string_t &output ) LIPP_NOEXCEPT
+	{
+#if !defined(LIPP_DO_NOT_USE_STL)
+		return true;
+#else
+		return false;
+#endif
+	}
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -177,19 +195,18 @@ template <class T> inline bool preprocessor<T>::define( string_view_t name, stri
 		}
 	}
 
-	_macros.push_back( { string_t( name ), string_t( value ) } );
+	T::push_back( _macros, { string_t( name ), string_t( value ) } );
 	return false;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
 template <class T> inline bool preprocessor<T>::undef( string_view_t name )
 {
-	for ( size_t i = 0, S = _macros.size(); i < S; ++i )
+	for ( size_t i = 0, S = T::size( _macros ); i < S; ++i )
 	{
 		if ( _macros[i].name == name )
 		{
-			_macros[i] = std::move( _macros[S - 1] );
-			_macros.pop_back();
+			T::swap_erase_at( _macros, i );
 			return true;
 		}
 	}
@@ -200,7 +217,7 @@ template <class T> inline bool preprocessor<T>::undef( string_view_t name )
 //---------------------------------------------------------------------------------------------------------------------
 template <class T> inline void preprocessor<T>::undef_all()
 {
-	_macros.clear();
+	T::clear( _macros );
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -278,7 +295,7 @@ template <class T> inline bool preprocessor<T>::include_file( string_view_t file
 		}
 	}
 
-#if !defined(LIPP_USE_CUSTOM_TYPES)
+#if !defined(LIPP_DO_NOT_USE_STL)
 	std::ifstream ifs( buff, std::ios_base::in | std::ios_base::binary );
 	if ( !ifs.is_open() )
 		return false;
@@ -301,7 +318,7 @@ template <class T> inline bool preprocessor<T>::include_file( string_view_t file
 //---------------------------------------------------------------------------------------------------------------------
 template <class T> inline void preprocessor<T>::write_line( string_view_t line ) LIPP_NOEXCEPT
 {
-#if !defined(LIPP_USE_CUSTOM_TYPES)
+#if !defined(LIPP_DO_NOT_USE_STL)
 	printf( "%.*s%s", int( T::size( line ) ), T::data( line ), T::eol );
 #endif
 }
