@@ -16,8 +16,6 @@
 	#include <string>
 	#include <vector>
 	#include <fstream>
-#else
-	/* Typedef your custom types with STL-like interfaces */
 #endif
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -83,6 +81,19 @@ struct preprocessor_traits
 	static bool read_file( const string_t &fileName, string_t &output ) LIPP_NOEXCEPT
 	{
 #if !defined(LIPP_DO_NOT_USE_STL)
+		std::ifstream ifs( fileName, std::ios_base::in | std::ios_base::binary );
+		if ( !ifs.is_open() )
+			return false;
+
+		ifs.seekg( 0, std::ios_base::end );
+		size_t len = ifs.tellg();
+		ifs.seekg( 0, std::ios_base::beg );
+
+		std::unique_ptr<char[]> data( new char[len + 1] );
+		ifs.read( data.get(), len );
+		data[len] = 0;
+
+		output = data.get();
 		return true;
 #else
 		return false;
@@ -295,24 +306,11 @@ template <class T> inline bool preprocessor<T>::include_file( string_view_t file
 		}
 	}
 
-#if !defined(LIPP_DO_NOT_USE_STL)
-	std::ifstream ifs( buff, std::ios_base::in | std::ios_base::binary );
-	if ( !ifs.is_open() )
+	string_t fileContent;
+	if ( !traits_t::read_file( buff, fileContent ) )
 		return false;
 
-	ifs.seekg( 0, std::ios_base::end );
-	size_t len = ifs.tellg();
-	ifs.seekg( 0, std::ios_base::beg );
-
-	std::unique_ptr<char[]> data( new char[len + 1] );
-	ifs.read( data.get(), len );
-	data[len] = 0;
-
-	return include_string( string_view_t( data.get(), len ), buff );
-#else
-	// Derive from 'lipp::preprocessor` and use your own implementation...
-	return false;
-#endif
+	return include_string( fileContent, buff );
 }
 
 //---------------------------------------------------------------------------------------------------------------------
