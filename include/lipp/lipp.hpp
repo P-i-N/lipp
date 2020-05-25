@@ -122,9 +122,11 @@ public:
 
 	virtual bool undef( string_view_t name );
 
-	virtual void undef_all();
-
 	virtual const char *find_macro( string_view_t name ) const LIPP_NOEXCEPT;
+
+	virtual void reset() LIPP_NOEXCEPT;
+
+	const string_t &output() const LIPP_NOEXCEPT { return _output; }
 
 	virtual bool include_string( string_view_t src, string_view_t sourceName ) LIPP_NOEXCEPT;
 
@@ -147,11 +149,15 @@ protected:
 
 	static string_view_t split_line( string_view_t &str ) LIPP_NOEXCEPT;
 
+	virtual int process_unknown_directive( string_view_t name, string_view_t line ) LIPP_NOEXCEPT { return 1; }
+
 	bool process_line( string_view_t line );
 
 	int process_directive( string_view_t dir );
 
 	int evaluate_expression( string_view_t expr ) const;
+
+	string_t _output;
 
 	struct macro
 	{
@@ -226,12 +232,6 @@ template <class T> inline bool preprocessor<T>::undef( string_view_t name )
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-template <class T> inline void preprocessor<T>::undef_all()
-{
-	T::clear( _macros );
-}
-
-//---------------------------------------------------------------------------------------------------------------------
 template <class T> inline const char *preprocessor<T>::find_macro( string_view_t name ) const LIPP_NOEXCEPT
 {
 	for ( const auto &m : _macros )
@@ -239,6 +239,13 @@ template <class T> inline const char *preprocessor<T>::find_macro( string_view_t
 			return m.value.c_str();
 
 	return nullptr;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+template <class T> inline void preprocessor<T>::reset() LIPP_NOEXCEPT
+{
+	_output = string_t();
+	T::clear( _macros );
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -316,9 +323,8 @@ template <class T> inline bool preprocessor<T>::include_file( string_view_t file
 //---------------------------------------------------------------------------------------------------------------------
 template <class T> inline void preprocessor<T>::write_line( string_view_t line ) LIPP_NOEXCEPT
 {
-#if !defined(LIPP_DO_NOT_USE_STL)
-	printf( "%.*s%s", int( T::size( line ) ), T::data( line ), T::eol );
-#endif
+	_output += line;
+	_output += T::eol;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -341,13 +347,13 @@ template <class T> inline typename T::string_view_t preprocessor<T>::trim( strin
 
 	if ( left )
 	{
-		while ( start < end && isspace( str[start] ) )
+		while ( start < end && str[start] <= 32 )
 			++start;
 	}
 
 	if ( right )
 	{
-		while ( end > start && isspace( str[end - 1] ) )
+		while ( end > start && str[end - 1] <= 32 )
 			--end;
 	}
 
@@ -416,7 +422,7 @@ template <class T> inline bool preprocessor<T>::process_line( string_view_t line
 	for ( size_t i = 0; i < T::size( line ); ++i, lastCh = ch )
 	{
 		ch = line[i];
-		if ( isspace( ch ) )
+		if ( ch <= 32 )
 			continue;
 
 		if ( _state.insideCommentBlock )
@@ -532,6 +538,10 @@ template <class T> inline int preprocessor<T>::process_directive( string_view_t 
 
 		auto fileName = string_view_t( T::data( dir ) + 1, T::size( dir ) - 2 );
 		include_file( fileName, isSystemPath );
+	}
+	else
+	{
+		return process_unknown_directive( dirName, dir );
 	}
 
 	return 0; // Do not output
