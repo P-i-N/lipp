@@ -38,6 +38,18 @@ struct error
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+enum class token_type
+{
+	unknown = 0,
+	eol,
+	number,
+	identifier,
+	operator_plus,
+	operator_minus,
+};
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 template <class String, class StringView, template <class> class Vector>
 struct preprocessor_traits
 {
@@ -112,6 +124,12 @@ public:
 	using string_view_t = typename traits_t::string_view_t;
 	template <typename U> using vector_t = typename traits_t::template vector_t<U>;
 
+	struct token
+	{
+		token_type type = token_type::unknown;
+		string_view_t text;
+	};
+
 	preprocessor() = default;
 
 	virtual ~preprocessor() = default;
@@ -138,20 +156,22 @@ public:
 
 	virtual void write_line( string_view_t line ) LIPP_NOEXCEPT;
 
-	virtual void write_line_directive( int lineNumber, string_view_t fileName ) LIPP_NOEXCEPT;
+	virtual void insert_line_directive( int lineNumber, string_view_t fileName ) LIPP_NOEXCEPT;
 
-	void write_line_directive() LIPP_NOEXCEPT { write_line_directive( _state.lineNumber, _state.sourceName ); }
+	void insert_line_directive() LIPP_NOEXCEPT { insert_line_directive( _state.lineNumber, _state.sourceName ); }
 
 protected:
 	static string_view_t trim( string_view_t str, bool left = true, bool right = true ) LIPP_NOEXCEPT;
 
-	static string_view_t split_token( string_view_t &str ) LIPP_NOEXCEPT;
-
 	static string_view_t split_line( string_view_t &str ) LIPP_NOEXCEPT;
+
+	static token split_token( string_view_t &str ) LIPP_NOEXCEPT;
 
 	virtual int process_unknown_directive( string_view_t name, string_view_t line ) LIPP_NOEXCEPT { return 1; }
 
-	bool process_line( string_view_t line );
+	token next_token() LIPP_NOEXCEPT;
+
+	bool process_current_line( string_view_t line );
 
 	int process_directive( string_view_t dir );
 
@@ -173,9 +193,11 @@ protected:
 	{
 		string_view_t cwd = string_view_t();
 		string_view_t sourceName = string_view_t();
+		string_view_t currentLine = string_view_t();
 		bool insideCommentBlock = false;
 		unsigned long long ifBits = 0;
 		int lineNumber = -1;
+		int column = 1;
 	} _state;
 };
 
@@ -268,17 +290,45 @@ template <class T> inline bool preprocessor<T>::include_string( string_view_t sr
 			_state.cwd = string_view_t( T::data( sourceName ), slashPos );
 	}
 
-	write_line_directive();
+	insert_line_directive();
 
 	while ( T::size( src ) )
 	{
-		auto line = split_line( src );
-		process_line( line );
-		++_state.lineNumber;
+		int consumedLines = 1;
+
+		_state.currentLine = string_view_t();
+
+		// Consume line(s) from 'src'
+		{
+			size_t length = 0;
+
+			char lastLineChar = 0;
+
+			while ( length < T::size( src ) )
+			{
+				auto ch = src[length++];
+				if ( ch == '\n' )
+				{
+					if ( lastLineChar != '\\' )
+						break;
+
+					lastLineChar = 0;
+					++consumedLines;
+				}
+				else if ( ch > 32 )
+					lastLineChar = ch;
+			}
+
+			_state.currentLine = string_view_t( T::data( src ), length );
+			src = string_view_t( T::data( src ) + length, T::size( src ) - length );
+		}
+
+		process_current_line( _state.currentLine );
+		_state.lineNumber += consumedLines;
 	}
 
 	if ( prevState->lineNumber >= traits_t::initial_line_number && _state.sourceName != prevState->sourceName )
-		write_line_directive( prevState->lineNumber, prevState->sourceName );
+		insert_line_directive( prevState->lineNumber, prevState->sourceName );
 
 	return true;
 }
@@ -328,7 +378,7 @@ template <class T> inline void preprocessor<T>::write_line( string_view_t line )
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-template <class T> inline void preprocessor<T>::write_line_directive( int lineNumber, string_view_t fileName ) LIPP_NOEXCEPT
+template <class T> inline void preprocessor<T>::insert_line_directive( int lineNumber, string_view_t fileName ) LIPP_NOEXCEPT
 {
 	char buff[T::char_buffer_size] = { };
 	LIPP_SPRINTF( buff, "#line %d \"%.*s\"",
@@ -361,38 +411,6 @@ template <class T> inline typename T::string_view_t preprocessor<T>::trim( strin
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-template <class T> inline typename T::string_view_t preprocessor<T>::split_token( string_view_t &str ) LIPP_NOEXCEPT
-{
-	str = trim( str, true, false );
-
-	if ( !T::size( str ) )
-		return traits_t::string_view_t();
-
-	static constexpr char *alphaNumChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._";
-
-	char firstChar = *T::data( str );
-	size_t length = 0;
-
-	if ( strchr( alphaNumChars, firstChar ) )
-	{
-		while ( strchr( alphaNumChars, str[length] ) )
-			++length;
-	}
-	else if ( strchr( "'\"", firstChar ) )
-	{
-
-	}
-	else if ( strchr( "=()&|!><+-/*", firstChar ) )
-	{
-
-	}
-
-	auto result = string_view_t( T::data( str ), length );
-	str = string_view_t( T::data( str ) + length, T::size( str ) - length );
-	return result;
-}
-
-//---------------------------------------------------------------------------------------------------------------------
 template <class T> inline typename T::string_view_t preprocessor<T>::split_line( string_view_t &str ) LIPP_NOEXCEPT
 {
 	if ( !T::size( str ) )
@@ -413,7 +431,66 @@ template <class T> inline typename T::string_view_t preprocessor<T>::split_line(
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-template <class T> inline bool preprocessor<T>::process_line( string_view_t line )
+template <class T> inline typename preprocessor<T>::token preprocessor<T>::split_token( string_view_t &str ) LIPP_NOEXCEPT
+{
+	str = trim( str, true, false );
+
+	if ( !T::size( str ) )
+		return token();
+
+	static constexpr char *alphaNumChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._";
+
+	char firstChar = *T::data( str );
+	size_t length = 0;
+
+	token result;
+
+	if ( strchr( alphaNumChars, firstChar ) )
+	{
+		while ( strchr( alphaNumChars, str[length] ) )
+			++length;
+	}
+	else if ( strchr( "'\"", firstChar ) )
+	{
+
+	}
+	else if ( strchr( "=()&|!><+-/*", firstChar ) )
+	{
+
+	}
+
+	result.text = string_view_t( T::data( str ), length );
+	str = string_view_t( T::data( str ) + length, T::size( str ) - length );
+	return result;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+template <class T> inline typename preprocessor<T>::token preprocessor<T>::next_token() LIPP_NOEXCEPT
+{
+	token result;
+
+	if ( !T::size( _state.currentLine ) )
+		return token();
+
+	// Skip whitespace
+	{
+		size_t length = 0;
+		while ( _state.currentLine[length] <= 32 )
+			++length;
+
+		if ( length )
+		{
+			_state.currentLine = string_view_t(
+			    T::data( _state.currentLine ) + length,
+			    T::size( _state.currentLine ) - length );
+		}
+	}
+
+	return result;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+template <class T> inline bool preprocessor<T>::process_current_line( string_view_t line )
 {
 	bool shouldOutput = true;
 	size_t directivePos( -1 );
@@ -470,13 +547,13 @@ template <class T> inline bool preprocessor<T>::process_line( string_view_t line
 //---------------------------------------------------------------------------------------------------------------------
 template <class T> inline int preprocessor<T>::process_directive( string_view_t dir )
 {
-	auto dirName = split_token( dir );
+	auto dirName = split_token( dir ).text;
 
 	/**/ if ( dirName == "define" )
 	{
-		if ( auto macroName = split_token( dir ); T::size( macroName ) )
+		if ( auto macroName = split_token( dir ).text; T::size( macroName ) )
 		{
-			define( macroName, split_token( dir ) );
+			define( macroName, split_token( dir ).text );
 			return 1;
 		}
 
@@ -484,7 +561,7 @@ template <class T> inline int preprocessor<T>::process_directive( string_view_t 
 	}
 	else if ( dirName == "undef" )
 	{
-		if ( auto macroName = split_token( dir ); T::size( macroName ) )
+		if ( auto macroName = split_token( dir ).text; T::size( macroName ) )
 		{
 			undef( macroName );
 			return 1;
@@ -494,14 +571,14 @@ template <class T> inline int preprocessor<T>::process_directive( string_view_t 
 	}
 	else if ( dirName == "ifdef" )
 	{
-		if ( auto macroName = split_token( dir ); T::size( macroName ) )
+		if ( auto macroName = split_token( dir ).text; T::size( macroName ) )
 			_state.ifBits = ( _state.ifBits << 2ull ) | ( ( find_macro( macroName ) != nullptr ) ? 0b11ull : 0b10ull );
 		else
 			return -1; // Error!
 	}
 	else if ( dirName == "ifndef" )
 	{
-		if ( auto macroName = split_token( dir ); T::size( macroName ) )
+		if ( auto macroName = split_token( dir ).text; T::size( macroName ) )
 			_state.ifBits = ( _state.ifBits << 2ull ) | ( ( find_macro( macroName ) == nullptr ) ? 0b11ull : 0b10ull );
 		else
 			return -1; // Error!
