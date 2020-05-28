@@ -171,7 +171,7 @@ protected:
 
 	token next_token() LIPP_NOEXCEPT;
 
-	bool process_current_line( string_view_t line );
+	bool process_current_line();
 
 	int process_directive( string_view_t dir );
 
@@ -323,7 +323,7 @@ template <class T> inline bool preprocessor<T>::include_string( string_view_t sr
 			src = string_view_t( T::data( src ) + length, T::size( src ) - length );
 		}
 
-		process_current_line( _state.currentLine );
+		process_current_line();
 		_state.lineNumber += consumedLines;
 	}
 
@@ -490,10 +490,13 @@ template <class T> inline typename preprocessor<T>::token preprocessor<T>::next_
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-template <class T> inline bool preprocessor<T>::process_current_line( string_view_t line )
+template <class T> inline bool preprocessor<T>::process_current_line()
 {
 	bool shouldOutput = true;
 	size_t directivePos( -1 );
+
+	auto &line = _state.currentLine;
+	_state.column = 1;
 
 	char ch = 0, lastCh = 0;
 	for ( size_t i = 0; i < T::size( line ); ++i, lastCh = ch )
