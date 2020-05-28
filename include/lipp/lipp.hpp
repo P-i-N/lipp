@@ -44,10 +44,17 @@ enum class token_type
 	number,
 	identifier,
 	string,
-	operator_hash,
-	operator_plus,
-	operator_minus,
-	operator_unknown,
+	directive,
+	parent_left,
+	parent_right,
+	add,
+	subtract,
+	divide,
+	multiply,
+	logical_not,
+	logical_and,
+	logical_or,
+	symbol,
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -63,7 +70,7 @@ struct preprocessor_traits
 	static constexpr bool keep_undefs = true;
 	static constexpr int initial_line_number = 1;
 
-	static constexpr char *eol = "\r\n";
+	static constexpr char *eol = "\n";
 	static constexpr char path_separator = '/';
 	static constexpr bool correct_paths = true;
 
@@ -90,28 +97,6 @@ struct preprocessor_traits
 	{
 		v[index] = std::move( v.back() );
 		v.pop_back();
-	}
-
-	static bool read_file( const string_t &fileName, string_t &output ) LIPP_NOEXCEPT
-	{
-#if !defined(LIPP_DO_NOT_USE_STL)
-		std::ifstream ifs( fileName, std::ios_base::in | std::ios_base::binary );
-		if ( !ifs.is_open() )
-			return false;
-
-		ifs.seekg( 0, std::ios_base::end );
-		size_t len = ifs.tellg();
-		ifs.seekg( 0, std::ios_base::beg );
-
-		std::unique_ptr<char[]> data( new char[len + 1] );
-		ifs.read( data.get(), len );
-		data[len] = 0;
-
-		output = data.get();
-		return true;
-#else
-		return false;
-#endif
 	}
 };
 
@@ -163,11 +148,15 @@ public:
 	void insert_line_directive() LIPP_NOEXCEPT { insert_line_directive( _state.lineNumber, _state.sourceName ); }
 
 protected:
-	static string_view_t substr( const string_view_t &sv, size_t offset, size_t length ) LIPP_NOEXCEPT;
+	static string_view_t substr( string_view_t sv, size_t offset, size_t length ) LIPP_NOEXCEPT;
 
-	static string_view_t substr( const string_view_t &sv, size_t offset ) LIPP_NOEXCEPT;
+	static string_view_t substr( string_view_t sv, size_t offset ) LIPP_NOEXCEPT;
+
+	static char char_at( string_view_t s, size_t index ) LIPP_NOEXCEPT;
 
 	static string_view_t trim( string_view_t str, bool left = true, bool right = true ) LIPP_NOEXCEPT;
+
+	virtual bool read_file( string_view_t fileName, string_t &output ) LIPP_NOEXCEPT;
 
 	virtual int process_unknown_directive( string_view_t name ) LIPP_NOEXCEPT { return 1; }
 
@@ -367,7 +356,7 @@ template <class T> inline bool preprocessor<T>::include_file( string_view_t file
 	}
 
 	string_t fileContent;
-	if ( !traits_t::read_file( buff, fileContent ) )
+	if ( !read_file( buff, fileContent ) )
 		return false;
 
 	return include_string( fileContent, buff );
@@ -393,17 +382,38 @@ template <class T> inline void preprocessor<T>::insert_line_directive( int lineN
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+template <class T> inline bool preprocessor<T>::read_file( string_view_t fileName, string_t &output ) LIPP_NOEXCEPT
+{
+#if !defined(LIPP_DO_NOT_USE_STL)
+	if ( std::ifstream ifs( string_t( fileName ).c_str() ); ifs.is_open() )
+	{
+		output = string_t( std::istreambuf_iterator<char>( ifs ), std::istreambuf_iterator<char>() );
+		return true;
+	}
+#endif
+
+	return false;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 template <class T> inline
-typename T::string_view_t preprocessor<T>::substr( const string_view_t &sv, size_t offset, size_t length ) LIPP_NOEXCEPT
+typename T::string_view_t preprocessor<T>::substr( string_view_t sv, size_t offset, size_t length ) LIPP_NOEXCEPT
 {
 	return string_view_t( T::data( sv ) + offset, length );
 }
 
 //---------------------------------------------------------------------------------------------------------------------
 template <class T> inline
-typename T::string_view_t preprocessor<T>::substr( const string_view_t &sv, size_t offset ) LIPP_NOEXCEPT
+typename T::string_view_t preprocessor<T>::substr( string_view_t sv, size_t offset ) LIPP_NOEXCEPT
 {
 	return string_view_t( T::data( sv ) + offset, T::size( sv ) - offset );
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+template <class T> inline
+char preprocessor<T>::char_at( string_view_t s, size_t index ) LIPP_NOEXCEPT
+{
+	return index < T::size( s ) ? s[index] : 0;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -437,9 +447,9 @@ template <class T> inline typename preprocessor<T>::token preprocessor<T>::next_
 
 	if ( _state.insideCommentBlock )
 	{
-		while ( ( T::size( line ) - whitespaceLength ) >= 2 )
+		while ( whitespaceLength < T::size( line ) )
 		{
-			if ( line[whitespaceLength] == '*' && line[whitespaceLength + 1] == '/' )
+			if ( char_at( line, whitespaceLength ) == '*' && char_at( line, whitespaceLength + 1 ) == '/' )
 			{
 				_state.insideCommentBlock = false;
 				whitespaceLength += 2;
@@ -465,18 +475,19 @@ template <class T> inline typename preprocessor<T>::token preprocessor<T>::next_
 
 	line = substr( line, whitespaceLength );
 
-	if ( !T::size( line ) )
+	auto firstChar = char_at( line, 0 );
+	if ( !firstChar )
 		return { token_type::empty };
 
 	// Skip comments
-	if ( ( T::size( line ) >= 2 ) && line[0] == '/' )
+	if ( firstChar == '/' )
 	{
-		/**/ if ( line[1] == '/' )
+		if ( auto nextCh = char_at( line, 1 ); nextCh == '/' )
 		{
 			line = string_view_t();
 			return { token_type::empty };
 		}
-		else if ( line[1] == '*' )
+		else if ( nextCh == '*' )
 		{
 			_state.insideCommentBlock = true;
 			line = substr( line, 2 );
@@ -484,37 +495,60 @@ template <class T> inline typename preprocessor<T>::token preprocessor<T>::next_
 		}
 	}
 
+	static constexpr char *alphaNumChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_$";
+	size_t tokenLength = 1;
+
+	/**/ if ( firstChar == '#' )
 	{
-		static constexpr char *alphaNumChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._";
+		result.type = token_type::directive;
+	}
+	else if ( strchr( alphaNumChars, firstChar ) )
+	{
+		result.type = token_type::identifier;
+		while ( strchr( alphaNumChars, line[tokenLength] ) )
+			++tokenLength;
+	}
+	else if ( strchr( "'\"", firstChar ) )
+	{
+		result.type = token_type::string;
+		auto lastChar = firstChar;
 
-		auto firstChar = _state.currentLine[0];
-		size_t length = 1;
+		while ( tokenLength < T::size( line ) )
+		{
+			auto ch = line[tokenLength++];
 
-		/**/ if ( firstChar == '#' )
-		{
-			result.type = token_type::operator_hash;
-		}
-		else if ( strchr( alphaNumChars, firstChar ) )
-		{
-			result.type = token_type::identifier;
-			while ( strchr( alphaNumChars, line[length] ) )
-				++length;
-		}
-		else if ( strchr( "'\"", firstChar ) )
-		{
-			result.type = token_type::string;
-			// TBD...
-		}
-		else if ( strchr( "!@#$%^&*()[]{}<>.,:;+-/*=|?~", firstChar ) )
-		{
-			result.type = token_type::operator_unknown;
-			// TBD...
-		}
+			if ( ch == firstChar && lastChar != '\\' )
+				break;
 
-		result.text = substr( line, 0, length );
-		line = substr( line, length );
+			lastChar = ch;
+		}
+	}
+	else if ( strchr( "!@#$%^&*()[]{}<>.,:;+-/*=|?~", firstChar ) )
+	{
+		result.type = token_type::symbol;
+		auto secondChar = char_at( line, 1 );
+
+		/**/ if ( firstChar == '(' ) result.type = token_type::parent_left;
+		else if ( firstChar == ')' ) result.type = token_type::parent_right;
+		else if ( firstChar == '+' ) result.type = token_type::add;
+		else if ( firstChar == '-' ) result.type = token_type::subtract;
+		else if ( firstChar == '/' ) result.type = token_type::divide;
+		else if ( firstChar == '*' ) result.type = token_type::multiply;
+		else if ( firstChar == '!' ) result.type = token_type::logical_not;
+		else if ( firstChar == '&' && secondChar == '&' )
+		{
+			result.type = token_type::logical_and;
+			++tokenLength;
+		}
+		else if ( firstChar == '|' && secondChar == '|' )
+		{
+			result.type = token_type::logical_or;
+			++tokenLength;
+		}
 	}
 
+	result.text = substr( line, 0, tokenLength );
+	line = substr( line, tokenLength );
 	return result;
 }
 
@@ -537,7 +571,7 @@ template <class T> inline bool preprocessor<T>::process_current_line()
 	{
 		auto t = next_token();
 
-		if ( t.type == token_type::operator_hash )
+		if ( t.type == token_type::directive )
 		{
 			if ( auto err = process_current_directive(); err < 0 )
 				return err;
@@ -555,13 +589,11 @@ template <class T> inline bool preprocessor<T>::process_current_line()
 //---------------------------------------------------------------------------------------------------------------------
 template <class T> inline int preprocessor<T>::process_current_directive()
 {
-	auto t = next_token();
-	if ( t.type != token_type::identifier )
+	auto directiveName = next_identifier();
+	if ( !T::size( directiveName ) )
 		return -1;
 
-	auto directive = t.text;
-
-	/**/ if ( directive == "define" )
+	/**/ if ( directiveName == "define" )
 	{
 		if ( auto macroName = next_identifier(); T::size( macroName ) )
 		{
@@ -572,7 +604,7 @@ template <class T> inline int preprocessor<T>::process_current_directive()
 
 		return -1; // Error!
 	}
-	else if ( directive == "undef" )
+	else if ( directiveName == "undef" )
 	{
 		if ( auto macroName = next_identifier(); T::size( macroName ) )
 		{
@@ -582,35 +614,35 @@ template <class T> inline int preprocessor<T>::process_current_directive()
 
 		return -1; // Error!
 	}
-	else if ( directive == "ifdef" )
+	else if ( directiveName == "ifdef" )
 	{
 		if ( auto macroName = next_identifier(); T::size( macroName ) )
 			_state.ifBits = ( _state.ifBits << 2ull ) | ( ( find_macro( macroName ) != nullptr ) ? 0b11ull : 0b10ull );
 		else
 			return -1; // Error!
 	}
-	else if ( directive == "ifndef" )
+	else if ( directiveName == "ifndef" )
 	{
 		if ( auto macroName = next_identifier(); T::size( macroName ) )
 			_state.ifBits = ( _state.ifBits << 2ull ) | ( ( find_macro( macroName ) == nullptr ) ? 0b11ull : 0b10ull );
 		else
 			return -1; // Error!
 	}
-	else if ( directive == "else" )
+	else if ( directiveName == "else" )
 	{
 		if ( !_state.ifBits )
 			return -1;
 
 		_state.ifBits ^= 1; // Flip first bit
 	}
-	else if ( directive == "endif" )
+	else if ( directiveName == "endif" )
 	{
 		if ( !_state.ifBits )
 			return -1;
 
 		_state.ifBits >>= 2;
 	}
-	else if ( directive == "include" )
+	else if ( directiveName == "include" )
 	{
 		auto path = trim( _state.currentLine );
 		_state.currentLine = string_view_t();
@@ -634,7 +666,7 @@ template <class T> inline int preprocessor<T>::process_current_directive()
 	}
 	else
 	{
-		return process_unknown_directive( directive );
+		return process_unknown_directive( directiveName );
 	}
 
 	return 0; // Do not output
