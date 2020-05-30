@@ -3,3 +3,5 @@
 #define Z 3
 
 Lorem ipsum!
+
+#print X + Y
