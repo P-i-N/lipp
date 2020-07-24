@@ -43,7 +43,6 @@ enum class token_type
 {
 	unknown = 0,
 	eol,
-	line_directive,
 	number,
 	identifier,
 	string,
@@ -422,18 +421,11 @@ template <class T> inline bool preprocessor<T>::include_file( string_view_t file
 	return include_string( fileContent, buff );
 }
 
-/*
-//---------------------------------------------------------------------------------------------------------------------
-template <class T> inline void preprocessor<T>::write( string_view_t text ) LIPP_NOEXCEPT
-{
-	_output += text;
-}
-*/
-
 //---------------------------------------------------------------------------------------------------------------------
 template <class T> inline void preprocessor<T>::write_token( token t ) LIPP_NOEXCEPT
 {
-
+	_output += t.whitespace;
+	_output += t.text;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -446,7 +438,7 @@ template <class T> inline void preprocessor<T>::insert_line_directive( int lineN
 	              int( T::size( fileName ) ),
 	              T::data( fileName ) )
 
-	write_token( { token_type::line_directive, string_view_t(), buff } );
+	write_token( { token_type::directive, string_view_t(), buff } );
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -731,7 +723,8 @@ template <class T> inline typename preprocessor<T>::string_t preprocessor<T>::co
 //---------------------------------------------------------------------------------------------------------------------
 template <class T> inline error preprocessor<T>::process_current_line() LIPP_NOEXCEPT
 {
-	bool shouldOutput = true;
+	bool outputOrigLine = false;
+	auto origLine = _state.currentLine;
 
 	while ( T::size( _state.currentLine ) )
 	{
@@ -742,7 +735,7 @@ template <class T> inline error preprocessor<T>::process_current_line() LIPP_NOE
 			if ( auto err = process_current_directive(); err < 0 )
 				return { 1 };
 			else
-				shouldOutput = ( err > 0 );
+				outputOrigLine = ( err > 0 );
 
 			break; // Nothing else to process after directive
 		}
@@ -750,6 +743,9 @@ template <class T> inline error preprocessor<T>::process_current_line() LIPP_NOE
 		if ( is_inside_true_block() )
 			write_token( t );
 	}
+
+	if ( outputOrigLine && is_inside_true_block() )
+		write_token( { token_type::directive, string_view_t(), origLine } );
 
 	return { error::none };
 }
