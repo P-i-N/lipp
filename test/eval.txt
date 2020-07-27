@@ -2,6 +2,4 @@
 #define Y 2
 #define Z 3
 
-Lorem ipsum!
-
-#print X + Y
+#print 123 + 456
