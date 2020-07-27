@@ -9,6 +9,6 @@ int main()
 
 	pp.include_file( "eval.txt" );
 
-	printf( "%s", pp.output().c_str() );
+	printf( "%s", pp.read_all().c_str() );
 	return 0;
 }
