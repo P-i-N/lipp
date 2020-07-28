@@ -1,5 +1,14 @@
+/* Hello */
 #define X 1
 #define Y 2
 #define Z 3
 
-#print 123 + 456
+Begin
+{
+#ifdef X
+X is defined.
+#else
+X is NOT defined!
+#endif
+}
+End
