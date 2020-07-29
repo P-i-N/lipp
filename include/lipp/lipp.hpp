@@ -36,10 +36,13 @@ enum class token_type
 	end,
 	parent_left,
 	parent_right,
+	brace_left,
+	brace_right,
 	add,
 	subtract,
 	divide,
 	multiply,
+	assign,
 	logical_and,
 	logical_or,
 	equal,
@@ -49,6 +52,7 @@ enum class token_type
 	logical_not,
 	less,
 	greater,
+	semicolon,
 	invalid,
 };
 
@@ -228,7 +232,7 @@ protected:
 
 	const auto &current_state() const LIPP_NOEXCEPT { return _states[T::size( _states ) - 1]; }
 
-	void make_error( int type ) LIPP_NOEXCEPT
+	virtual void make_error( int type ) LIPP_NOEXCEPT
 	{
 		if ( T::size( _states ) )
 		{
@@ -703,10 +707,13 @@ template <class T> inline bool preprocessor<T>::next_token( token &result, int f
 
 		/**/ if ( ch == '(' ) result.type = token_type::parent_left;
 		else if ( ch == ')' ) result.type = token_type::parent_right;
+		else if ( ch == '{' ) result.type = token_type::brace_left;
+		else if ( ch == '}' ) result.type = token_type::brace_right;
 		else if ( ch == '+' ) result.type = token_type::add;
 		else if ( ch == '-' ) result.type = token_type::subtract;
 		else if ( ch == '/' ) result.type = token_type::divide;
 		else if ( ch == '*' ) result.type = token_type::multiply;
+		else if ( ch == ';' ) result.type = token_type::semicolon;
 		else if ( ch == '&' && secondChar == '&' )
 		{
 			result.type = token_type::logical_and;
@@ -740,6 +747,7 @@ template <class T> inline bool preprocessor<T>::next_token( token &result, int f
 		else if ( ch == '!' ) result.type = token_type::logical_not;
 		else if ( ch == '<' ) result.type = token_type::less;
 		else if ( ch == '>' ) result.type = token_type::greater;
+		else if ( ch == '=' ) result.type = token_type::assign;
 	}
 
 	result.text = substr( src, 0, tokenLength );
