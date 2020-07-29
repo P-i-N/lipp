@@ -7,7 +7,7 @@ int main()
 
 	lipp::preprocessor<traits> pp;
 
-	pp.include_file( "eval.txt" );
+	pp.include_file( "include_test.txt" );
 
 	printf( "%s", pp.read_all().c_str() );
 	return 0;

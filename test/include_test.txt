@@ -1,4 +1,5 @@
 Hello, world!
 -------------
 
-#include "dir/another_file.txt" xxx // Look! A commnent!
+#include "dir/another_file.txt"
+xxx // Look! A commnent!

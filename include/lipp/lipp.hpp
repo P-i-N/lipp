@@ -125,10 +125,6 @@ public:
 
 	bool include_file( string_view_t fileName ) LIPP_NOEXCEPT { return include_file( fileName, false ); }
 
-	virtual void emit_line_directive( int lineNumber, string_view_t fileName ) LIPP_NOEXCEPT;
-
-	void emit_line_directive() LIPP_NOEXCEPT;
-
 	bool is_inside_true_block() const LIPP_NOEXCEPT { return !( ( _ifBits + 1ull ) & _ifBits ); }
 
 	struct token
@@ -139,7 +135,16 @@ public:
 		double number = 0.0;
 	};
 
-	bool next_token( token &result, bool catchEOLs = false, bool expandMacros = true ) LIPP_NOEXCEPT;
+	enum parsing_flags
+	{
+		stop_at_eols     = 0b0'0000'0001,
+		expand_macros    = 0b0'0000'0010,
+		unescape_strings = 0b0'0000'0100,
+
+		default_parsing_flags = expand_macros | unescape_strings
+	};
+
+	bool next_token( token &result, int flags = default_parsing_flags ) LIPP_NOEXCEPT;
 
 	string_t read_all() LIPP_NOEXCEPT;
 
@@ -150,8 +155,11 @@ public:
 			none = 0,
 			unexpected_eof,
 			syntax_error,
+			invalid_string,
+			invalid_path,
 			expected_identifier,
-			mismatch_if
+			mismatch_if,
+			include_error
 		};
 
 		int type = none;
@@ -207,8 +215,9 @@ protected:
 		string_t source = string_t();
 		string_view_t sourceView = string_view_t();
 
-		int lineNumber = -1;
+		int lineNumber = 1;
 		bool toBeRemoved = false;
+		bool emitLineDirective = true;
 	};
 
 	using states_t = vector_t<source_state>;
@@ -344,7 +353,6 @@ template <class T> inline bool preprocessor<T>::include_string( string_view_t sr
 	state.source = src;
 	state.sourceView = state.source;
 	state.sourceName = sourceName;
-	state.lineNumber = 1;
 
 	// Resolve current working directory
 	{
@@ -353,10 +361,9 @@ template <class T> inline bool preprocessor<T>::include_string( string_view_t sr
 			--slashPos;
 
 		if ( slashPos < T::size( sourceName ) )
-			state.cwd = string_view_t( T::data( sourceName ), slashPos );
+			state.cwd = string_view_t( T::data( state.sourceName ), slashPos );
 	}
 
-	emit_line_directive();
 	return true;
 }
 
@@ -368,17 +375,22 @@ template <class T> inline bool preprocessor<T>::include_file( string_view_t file
 	if ( !isSystemPath && T::size( _states ) )
 	{
 		auto &state = current_state();
+		if ( T::size( state.cwd ) )
+		{
+			LIPP_SPRINTF( buff, "%.*s%c%.*s",
+			              int( T::size( state.cwd ) ),
+			              T::data( state.cwd ),
+			              T::path_separator,
+			              int( T::size( fileName ) ),
+			              T::data( fileName ) )
+		}
+	}
 
-		LIPP_SPRINTF( buff, "%.*s%c%.*s",
-		              int( T::size( state.cwd ) ),
-		              T::data( state.cwd ),
-		              T::path_separator,
+	if ( !buff[0] )
+	{
+		LIPP_SPRINTF( buff, "%.*s",
 		              int( T::size( fileName ) ),
 		              T::data( fileName ) )
-	}
-	else
-	{
-		LIPP_SPRINTF( buff, "%.*s", int( T::size( fileName ) ), T::data( fileName ) )
 	}
 
 	// Correct path
@@ -397,29 +409,6 @@ template <class T> inline bool preprocessor<T>::include_file( string_view_t file
 		return false;
 
 	return include_string( fileContent, buff );
-}
-
-//---------------------------------------------------------------------------------------------------------------------
-template <class T> inline void preprocessor<T>::emit_line_directive( int lineNumber, string_view_t fileName ) LIPP_NOEXCEPT
-{
-	char buff[char_buffer_size] = { };
-
-	LIPP_SPRINTF( buff, "#line %d \"%.*s\"\n",
-	              lineNumber,
-	              int( T::size( fileName ) ),
-	              T::data( fileName ) )
-
-	//write_token( { token_type::directive, buff } );
-}
-
-//---------------------------------------------------------------------------------------------------------------------
-template <class T> inline void preprocessor<T>::emit_line_directive() LIPP_NOEXCEPT
-{
-	if ( T::size( _states ) )
-	{
-		auto &state = current_state();
-		emit_line_directive( state.lineNumber, state.sourceName );
-	}
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -476,7 +465,7 @@ template <class T> inline char preprocessor<T>::char_at( const string_t &s, size
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-template <class T> inline bool preprocessor<T>::next_token( token &result, bool catchEOLs, bool expandMacros ) LIPP_NOEXCEPT
+template <class T> inline bool preprocessor<T>::next_token( token &result, int flags ) LIPP_NOEXCEPT
 {
 	result = token();
 
@@ -489,6 +478,9 @@ template <class T> inline bool preprocessor<T>::next_token( token &result, bool 
 		}
 
 		T::pop_back( _states );
+
+		if ( T::size( _states ) )
+			current_state().emitLineDirective = true;
 	}
 
 	if ( T::size( _states ) == 0 )
@@ -499,7 +491,7 @@ template <class T> inline bool preprocessor<T>::next_token( token &result, bool 
 
 	size_t whitespaceLength = 0;
 	bool insideLineComment = false;
-	bool returnEOL = false;
+	bool prevInsideCommentBlock = _insideCommentBlock;
 
 	// Consume as much whitespace as possible
 	while ( whitespaceLength < T::size( src ) )
@@ -508,14 +500,13 @@ template <class T> inline bool preprocessor<T>::next_token( token &result, bool 
 
 		if ( ch == '\n' )
 		{
-			++state.lineNumber;
-
-			if ( catchEOLs )
+			if ( !!( flags & stop_at_eols ) )
 			{
-				returnEOL = true;
-				++whitespaceLength;
-				break;
+				_insideCommentBlock = prevInsideCommentBlock;
+				return false;
 			}
+
+			++state.lineNumber;
 		}
 
 		if ( _insideCommentBlock )
@@ -552,15 +543,30 @@ template <class T> inline bool preprocessor<T>::next_token( token &result, bool 
 		++whitespaceLength;
 	}
 
+	if ( !!( flags & stop_at_eols ) && whitespaceLength == T::size( src ) )
+	{
+		_insideCommentBlock = prevInsideCommentBlock;
+		return false;
+	}
+
 	result.whitespace = substr( src, 0, whitespaceLength );
 	src = substr( src, whitespaceLength );
 
-	if ( returnEOL )
+	if ( state.emitLineDirective )
 	{
-		result.type = token_type::eol;
+		char buff[char_buffer_size] = { };
+
+		LIPP_SPRINTF( buff, "#line %d \"%s\"\n", state.lineNumber, T::data( state.sourceName ) );
+		_tempString = buff;
+
+		result.type = token_type::directive;
+		result.text = _tempString;
+
+		state.emitLineDirective = false;
 		return true;
 	}
-	else if ( T::size( src ) == 0 )
+
+	if ( T::size( src ) == 0 )
 	{
 		if ( _insideCommentBlock )
 		{
@@ -667,19 +673,29 @@ template <class T> inline bool preprocessor<T>::next_token( token &result, bool 
 
 		while ( tokenLength < T::size( src ) )
 		{
-			auto ch = src[tokenLength++];
-
-			if ( ch == ch && lastChar != '\\' )
+			auto c = src[tokenLength++];
+			if ( ch == c && lastChar != '\\' )
 				break;
 
-			lastChar = ch;
+			lastChar = c;
 		}
 
 		if ( tokenLength < 2 || src[tokenLength - 1] != ch )
 		{
-			make_error( error::syntax_error );
+			make_error( error::invalid_string );
 			return false;
 		}
+
+		if ( flags & unescape_strings )
+		{
+			_tempString = string_t();
+			result.text = _tempString;
+		}
+		else
+			result.text = substr( src, 1, tokenLength - 2 );
+
+		src = substr( src, tokenLength );
+		return true;
 	}
 	else if ( strchr( "!@#$%^&*()[]{}<>.,:;+-/*=|?~", ch ) )
 	{
@@ -763,7 +779,7 @@ template <class T> inline typename preprocessor<T>::string_view_t preprocessor<T
 template <class T> inline bool preprocessor<T>::concat_remaining_tokens( string_t &result ) LIPP_NOEXCEPT
 {
 	token t;
-	while ( next_token( t, true, false ) )
+	while ( next_token( t, stop_at_eols | unescape_strings ) )
 	{
 		if ( t.type == token_type::eol || t.type == token_type::eof )
 			break;
@@ -802,7 +818,6 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 			_tempString += macroName;
 			_tempString += " ";
 			_tempString += value;
-			_tempString += "\n";
 
 			result.text = _tempString;
 			return true;
@@ -854,6 +869,7 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 		if ( _ifBits )
 		{
 			_ifBits ^= 1; // Flip first bit
+			state.emitLineDirective |= is_inside_true_block();
 			return next_token( result );
 		}
 
@@ -865,6 +881,7 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 		if ( _ifBits )
 		{
 			_ifBits >>= 2;
+			state.emitLineDirective |= is_inside_true_block();
 			return next_token( result );
 		}
 
@@ -877,32 +894,48 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 	}
 	else if ( directiveName == "include" )
 	{
-		/*
-		auto pathToken = next_token();
-		bool isSystemPath = pathToken.type == token_type::less;
-
-		if ( pathToken.type == token_type::string )
+		token t;
+		if ( !next_token( t, stop_at_eols ) )
 		{
-			// Trim string quotes
-			pathToken.text = substr( pathToken.text, 1, T::size( pathToken.text ) - 2 );
+			make_error( error::syntax_error );
+			return false;
 		}
-		else if ( pathToken.type == token_type::less )
+
+		bool isSystemPath = t.type == token_type::less;
+		string_t fileName;
+
+		if ( t.type == token_type::string )
+			fileName = t.text;
+		else if ( t.type == token_type::less )
 		{
-			size_t length = 0;
-			while ( length < T::size( line ) && line[length] != '>' )
-				++length;
+			while ( next_token( t, stop_at_eols ) )
+			{
+				if ( t.type == token_type::greater || t.type == token_type::string )
+					break;
 
-			if ( length >= T::size( line ) )
-				return -1;
+				fileName += t.whitespace;
+				fileName += t.text;
+			}
 
-			pathToken.text = substr( line, 0, length );
-			line = substr( line, length + 1 );
+			if ( _error.type != 0 )
+				return false;
+			else if ( t.type != token_type::greater )
+			{
+				make_error( error::invalid_path );
+				return false;
+			}
 		}
 		else
-			return -1;
+		{
+			make_error( error::invalid_path );
+			return false;
+		}
 
-		include_file( pathToken.text, isSystemPath );
-		*/
+		if ( !include_file( fileName, isSystemPath ) )
+		{
+			make_error( error::include_error );
+			return false;
+		}
 	}
 	else
 	{
