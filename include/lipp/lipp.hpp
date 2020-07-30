@@ -15,9 +15,41 @@
 #endif
 
 #if !defined(LIPP_DO_NOT_USE_STL)
-	#include <string>
-	#include <vector>
-	#include <fstream>
+#include <string>
+#include <vector>
+#include <fstream>
+
+namespace lipp {
+
+template <class T>
+inline size_t size( const std::basic_string<T> &str ) LIPP_NOEXCEPT { return str.size(); }
+
+template <class T>
+inline const T *data( const std::basic_string<T> &str ) LIPP_NOEXCEPT { return str.data(); }
+
+template <class T>
+inline size_t size( const std::basic_string_view<T> &sv ) LIPP_NOEXCEPT { return sv.size(); }
+
+template <class T>
+inline const T *data( const std::basic_string_view<T> &sv ) LIPP_NOEXCEPT { return sv.data(); }
+
+template <class T, class A>
+void clear( std::vector<T, A> &vec ) LIPP_NOEXCEPT { vec.clear(); }
+
+template <class T, class A>
+size_t size( const std::vector<T, A> &vec ) LIPP_NOEXCEPT { return vec.size(); }
+
+template <class T, class A>
+void push_back( std::vector<T, A> &vec, const T &item ) LIPP_NOEXCEPT { vec.push_back( item ); }
+
+template <class T, class A>
+void pop_back( std::vector<T, A> &vec ) LIPP_NOEXCEPT { vec.pop_back(); }
+
+template <class T, class A>
+void swap_erase_at( std::vector<T, A> &vec, size_t index ) LIPP_NOEXCEPT
+{ vec[index] = std::move( vec[vec.size() - 1] ); pop_back( vec ); }
+
+} // namespace lipp
 #endif
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -27,13 +59,11 @@ namespace lipp {
 enum class token_type
 {
 	unknown = 0,
-	eol,
 	eof,
 	number,
 	identifier,
 	string,
 	directive,
-	end,
 	parent_left,
 	parent_right,
 	brace_left,
@@ -53,8 +83,11 @@ enum class token_type
 	less,
 	greater,
 	semicolon,
-	invalid,
 };
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+inline size_t size( const char *str ) LIPP_NOEXCEPT { return str ? strlen( str ) : 0; }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -113,8 +146,6 @@ public:
 
 	bool define( string_view_t name ) LIPP_NOEXCEPT { return define( name, "" ); }
 
-	void define_multiple( string_view_t defines ) LIPP_NOEXCEPT;
-
 	virtual bool undef( string_view_t name ) LIPP_NOEXCEPT;
 
 	virtual const char *find_macro( string_view_t name ) const LIPP_NOEXCEPT;
@@ -163,7 +194,8 @@ public:
 			invalid_path,
 			expected_identifier,
 			mismatch_if,
-			include_error
+			include_error,
+			read_failed,
 		};
 
 		int type = none;
@@ -274,43 +306,6 @@ template <class T> inline bool preprocessor<T>::define( string_view_t name, stri
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-template <class T> inline void preprocessor<T>::define_multiple( string_view_t defines ) LIPP_NOEXCEPT
-{
-	while ( T::size( defines ) )
-	{
-		size_t semicolon = 0;
-		while ( semicolon < T::size( defines ) )
-		{
-			if ( defines[semicolon] == ';' )
-				break;
-
-			++semicolon;
-		}
-
-		auto d = substr( defines, 0, semicolon );
-
-		size_t eqPos = 0;
-		while ( eqPos < T::size( d ) )
-		{
-			if ( d[eqPos] == '=' )
-				break;
-
-			++eqPos;
-		}
-
-		if ( eqPos < T::size( d ) )
-			define( substr( d, 0, eqPos ), substr( d, eqPos + 1 ) );
-		else
-			define( d );
-
-		if ( semicolon < T::size( defines ) )
-			defines = substr( defines, semicolon + 1 );
-		else
-			break;
-	}
-}
-
-//---------------------------------------------------------------------------------------------------------------------
 template <class T> inline bool preprocessor<T>::undef( string_view_t name ) LIPP_NOEXCEPT
 {
 	for ( size_t i = 0, S = T::size( _macros ); i < S; ++i )
@@ -410,7 +405,12 @@ template <class T> inline bool preprocessor<T>::include_file( string_view_t file
 
 	string_t fileContent;
 	if ( !read_file( buff, fileContent ) )
+	{
+		if ( _error.type == 0 )
+			make_error( error::read_failed );
+
 		return false;
+	}
 
 	return include_string( fileContent, buff );
 }
@@ -426,6 +426,7 @@ template <class T> inline bool preprocessor<T>::read_file( string_view_t fileNam
 	}
 #endif
 
+	make_error( error::read_failed );
 	return false;
 }
 
@@ -789,9 +790,6 @@ template <class T> inline bool preprocessor<T>::concat_remaining_tokens( string_
 	token t;
 	while ( next_token( t, stop_at_eols | unescape_strings ) )
 	{
-		if ( t.type == token_type::eol || t.type == token_type::eof )
-			break;
-
 		if ( T::size( result ) )
 			result += " ";
 
