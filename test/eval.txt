@@ -2,6 +2,10 @@
 #define Y 2
 #define Z 3
 
+x = X
+y = Y
+z = Z
+
 Begin
 {
 #ifdef X
