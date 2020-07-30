@@ -22,22 +22,13 @@
 namespace lipp {
 
 template <class T>
-inline size_t size( const std::basic_string<T> &str ) LIPP_NOEXCEPT { return str.size(); }
+inline size_t size( const T &container ) LIPP_NOEXCEPT { return container.size(); }
 
 template <class T>
-inline const T *data( const std::basic_string<T> &str ) LIPP_NOEXCEPT { return str.data(); }
-
-template <class T>
-inline size_t size( const std::basic_string_view<T> &sv ) LIPP_NOEXCEPT { return sv.size(); }
-
-template <class T>
-inline const T *data( const std::basic_string_view<T> &sv ) LIPP_NOEXCEPT { return sv.data(); }
+inline const T *data( const T &container ) LIPP_NOEXCEPT { return container.data(); }
 
 template <class T, class A>
 void clear( std::vector<T, A> &vec ) LIPP_NOEXCEPT { vec.clear(); }
-
-template <class T, class A>
-size_t size( const std::vector<T, A> &vec ) LIPP_NOEXCEPT { return vec.size(); }
 
 template <class T, class A>
 void push_back( std::vector<T, A> &vec, const T &item ) LIPP_NOEXCEPT { vec.push_back( item ); }
@@ -236,13 +227,13 @@ protected:
 
 	states_t _states;
 
-	auto &current_state() LIPP_NOEXCEPT { return _states[size( _states ) - 1]; }
+	auto &current_state() LIPP_NOEXCEPT { return _states[lipp::size( _states ) - 1]; }
 
-	const auto &current_state() const LIPP_NOEXCEPT { return _states[size( _states ) - 1]; }
+	const auto &current_state() const LIPP_NOEXCEPT { return _states[lipp::size( _states ) - 1]; }
 
 	virtual void make_error( int type ) LIPP_NOEXCEPT
 	{
-		if ( size( _states ) )
+		if ( lipp::size( _states ) )
 		{
 			const auto &state = current_state();
 			_error = { type, state.sourceName, state.lineNumber };
@@ -284,7 +275,7 @@ template <class T> inline bool preprocessor<T>::define( string_view_t name, stri
 //---------------------------------------------------------------------------------------------------------------------
 template <class T> inline bool preprocessor<T>::undef( string_view_t name ) LIPP_NOEXCEPT
 {
-	for ( size_t i = 0, S = size( _macros ); i < S; ++i )
+	for ( size_t i = 0, S = lipp::size( _macros ); i < S; ++i )
 	{
 		if ( _macros[i].name == name )
 		{
@@ -320,7 +311,7 @@ template <class T> inline void preprocessor<T>::reset() LIPP_NOEXCEPT
 //---------------------------------------------------------------------------------------------------------------------
 template <class T> inline bool preprocessor<T>::include_string( string_view_t src, string_view_t sourceName ) LIPP_NOEXCEPT
 {
-	if ( !size( src ) )
+	if ( !lipp::size( src ) )
 		return true;
 
 	push_back( _states, {} );
@@ -331,11 +322,11 @@ template <class T> inline bool preprocessor<T>::include_string( string_view_t sr
 
 	// Resolve current working directory
 	{
-		size_t slashPos = size( sourceName ) - 1;
-		while ( slashPos < size( sourceName ) && sourceName[slashPos] != '/' && sourceName[slashPos] != '\\' )
+		size_t slashPos = lipp::size( sourceName ) - 1;
+		while ( slashPos < lipp::size( sourceName ) && sourceName[slashPos] != '/' && sourceName[slashPos] != '\\' )
 			--slashPos;
 
-		if ( slashPos < size( sourceName ) )
+		if ( slashPos < lipp::size( sourceName ) )
 			state.cwd = string_view_t( data( state.sourceName ), slashPos );
 	}
 
@@ -347,15 +338,15 @@ template <class T> inline bool preprocessor<T>::include_file( string_view_t file
 {
 	char_t buff[char_t_buffer_size] = { };
 
-	if ( !isSystemPath && size( _states ) )
+	if ( !isSystemPath && lipp::size( _states ) )
 	{
 		auto &state = current_state();
-		if ( size( state.cwd ) )
+		if ( lipp::size( state.cwd ) )
 		{
 			LIPP_SPRINTF( buff, "%.*s/%.*s",
-			              int( size( state.cwd ) ),
+			              int( lipp::size( state.cwd ) ),
 			              data( state.cwd ),
-			              int( size( fileName ) ),
+			              int( lipp::size( fileName ) ),
 			              data( fileName ) )
 		}
 	}
@@ -363,12 +354,12 @@ template <class T> inline bool preprocessor<T>::include_file( string_view_t file
 	if ( !buff[0] )
 	{
 		LIPP_SPRINTF( buff, "%.*s",
-		              int( size( fileName ) ),
+		              int( lipp::size( fileName ) ),
 		              data( fileName ) )
 	}
 
 	// Correct path separators
-	for ( size_t i = 0, S = size( buff ); i < S; ++i )
+	for ( size_t i = 0, S = lipp::size( buff ); i < S; ++i )
 	{
 		if ( buff[i] == '\\' )
 			buff[i] = '/';
@@ -406,7 +397,7 @@ template <class T> inline
 typename T::string_view_t preprocessor<T>::trim( string_view_t s ) LIPP_NOEXCEPT
 {
 	size_t start = 0;
-	size_t end = size( s );
+	size_t end = lipp::size( s );
 
 	while ( start < end && s[start] <= 32 ) ++start;
 	while ( end > start && s[end - 1] <= 32 ) --end;
@@ -425,21 +416,21 @@ typename T::string_view_t preprocessor<T>::substr( string_view_t sv, size_t offs
 template <class T> inline
 typename T::string_view_t preprocessor<T>::substr( string_view_t sv, size_t offset ) LIPP_NOEXCEPT
 {
-	return string_view_t( data( sv ) + offset, size( sv ) - offset );
+	return string_view_t( data( sv ) + offset, lipp::size( sv ) - offset );
 }
 
 //---------------------------------------------------------------------------------------------------------------------
 template <class T> inline
 typename T::char_t preprocessor<T>::char_t_at( string_view_t s, size_t index ) LIPP_NOEXCEPT
 {
-	return index < size( s ) ? s[index] : 0;
+	return index < lipp::size( s ) ? s[index] : 0;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
 template <class T> inline
 typename T::char_t preprocessor<T>::char_t_at( const string_t &s, size_t index ) LIPP_NOEXCEPT
 {
-	return index < size( s ) ? s[index] : 0;
+	return index < lipp::size( s ) ? s[index] : 0;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -447,7 +438,7 @@ template <class T> inline bool preprocessor<T>::next_token( token &result, int f
 {
 	result = token();
 
-	while ( size( _states ) > 0 && _states[size( _states ) - 1].toBeRemoved )
+	while ( lipp::size( _states ) > 0 && _states[lipp::size( _states ) - 1].toBeRemoved )
 	{
 		if ( _ifBits )
 		{
@@ -457,11 +448,11 @@ template <class T> inline bool preprocessor<T>::next_token( token &result, int f
 
 		pop_back( _states );
 
-		if ( size( _states ) )
+		if ( lipp::size( _states ) )
 			current_state().emitLineDirective = true;
 	}
 
-	if ( size( _states ) == 0 )
+	if ( lipp::size( _states ) == 0 )
 		return false;
 
 	auto &state = current_state();
@@ -472,7 +463,7 @@ template <class T> inline bool preprocessor<T>::next_token( token &result, int f
 	bool prevInsideCommentBlock = _insideCommentBlock;
 
 	// Consume as much whitespace as possible
-	while ( whitespaceLength < size( src ) )
+	while ( whitespaceLength < lipp::size( src ) )
 	{
 		auto ch = char_t_at( src, whitespaceLength );
 
@@ -521,7 +512,7 @@ template <class T> inline bool preprocessor<T>::next_token( token &result, int f
 		++whitespaceLength;
 	}
 
-	if ( !!( flags & stop_at_eols ) && whitespaceLength == size( src ) )
+	if ( !!( flags & stop_at_eols ) && whitespaceLength == lipp::size( src ) )
 	{
 		_insideCommentBlock = prevInsideCommentBlock;
 		return false;
@@ -545,7 +536,7 @@ template <class T> inline bool preprocessor<T>::next_token( token &result, int f
 		return true;
 	}
 
-	if ( size( src ) == 0 )
+	if ( lipp::size( src ) == 0 )
 	{
 		if ( _insideCommentBlock )
 		{
@@ -575,7 +566,7 @@ template <class T> inline bool preprocessor<T>::next_token( token &result, int f
 	{
 		result.type = token_type::identifier;
 
-		while ( tokenLength < size( src ) )
+		while ( tokenLength < lipp::size( src ) )
 		{
 			auto ch = char_t_at( src, tokenLength );
 			if ( !strchr( alphaChars, ch ) && !strchr( numChars, ch ) )
@@ -595,7 +586,7 @@ template <class T> inline bool preprocessor<T>::next_token( token &result, int f
 		bool containsDot = false;
 		bool containsExponent = false;
 
-		while ( tokenLength < size( src ) )
+		while ( tokenLength < lipp::size( src ) )
 		{
 			auto ch = src[tokenLength];
 
@@ -651,7 +642,7 @@ template <class T> inline bool preprocessor<T>::next_token( token &result, int f
 		result.type = token_type::string;
 		auto lastChar = ch;
 
-		while ( tokenLength < size( src ) )
+		while ( tokenLength < lipp::size( src ) )
 		{
 			auto c = src[tokenLength++];
 			if ( ch == c && lastChar != '\\' )
@@ -776,7 +767,7 @@ template <class T> inline bool preprocessor<T>::concat_remaining_tokens( string_
 	token t;
 	while ( next_token( t, stop_at_eols | unescape_strings ) )
 	{
-		if ( size( result ) )
+		if ( lipp::size( result ) )
 			result += " ";
 
 		result += string_t( t.text );
@@ -792,12 +783,12 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 	auto &src = state.sourceView;
 
 	auto directiveName = next_identifier();
-	if ( !size( directiveName ) )
+	if ( !lipp::size( directiveName ) )
 		return false;
 
 	/**/ if ( directiveName == "define" )
 	{
-		if ( auto macroName = next_identifier(); size( macroName ) )
+		if ( auto macroName = next_identifier(); lipp::size( macroName ) )
 		{
 			string_t value;
 
@@ -819,7 +810,7 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 	}
 	else if ( directiveName == "undef" )
 	{
-		if ( auto macroName = next_identifier(); size( macroName ) )
+		if ( auto macroName = next_identifier(); lipp::size( macroName ) )
 		{
 			undef( macroName );
 
@@ -834,7 +825,7 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 	}
 	else if ( directiveName == "ifdef" )
 	{
-		if ( auto macroName = next_identifier(); size( macroName ) )
+		if ( auto macroName = next_identifier(); lipp::size( macroName ) )
 		{
 			_ifBits = ( _ifBits << 2ull ) | ( ( find_macro( macroName ) != nullptr ) ? 0b11ull : 0b10ull );
 			return next_token( result );
@@ -844,7 +835,7 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 	}
 	else if ( directiveName == "ifndef" )
 	{
-		if ( auto macroName = next_identifier(); size( macroName ) )
+		if ( auto macroName = next_identifier(); lipp::size( macroName ) )
 		{
 			_ifBits = ( _ifBits << 2ull ) | ( ( find_macro( macroName ) == nullptr ) ? 0b11ull : 0b10ull );
 			return next_token( result );
