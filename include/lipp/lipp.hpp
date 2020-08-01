@@ -76,6 +76,19 @@ enum class token_type
 	semicolon,
 };
 
+enum class error_type
+{
+	none = 0,
+	unexpected_eof,
+	syntax_error,
+	invalid_string,
+	invalid_path,
+	expected_identifier,
+	mismatch_if,
+	include_error,
+	read_failed,
+};
+
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 inline size_t size( const char *str ) LIPP_NOEXCEPT { return str ? strlen( str ) : 0; }
@@ -127,6 +140,12 @@ public:
 
 	bool is_inside_true_block() const LIPP_NOEXCEPT { return !( ( _ifBits + 1ull ) & _ifBits ); }
 
+	string_view_t current_source_name() const LIPP_NOEXCEPT;
+
+	int current_line_number() const LIPP_NOEXCEPT;
+
+	error_type error() const LIPP_NOEXCEPT { return _error; }
+
 	struct token
 	{
 		token_type type;
@@ -147,30 +166,6 @@ public:
 	bool next_token( token &result, int flags = default_parsing_flags ) LIPP_NOEXCEPT;
 
 	string_t read_all() LIPP_NOEXCEPT;
-
-	struct error
-	{
-		enum
-		{
-			none = 0,
-			unexpected_eof,
-			syntax_error,
-			invalid_string,
-			invalid_path,
-			expected_identifier,
-			mismatch_if,
-			include_error,
-			read_failed,
-		};
-
-		int type = none;
-		string_view_t source_name = string_view_t();
-		int line = 0;
-
-		operator int() const LIPP_NOEXCEPT { return type; }
-	};
-
-	error last_error() const LIPP_NOEXCEPT { return _error; }
 
 protected:
 	static constexpr size_t char_t_buffer_size = 256;
@@ -231,18 +226,7 @@ protected:
 
 	const auto &current_state() const LIPP_NOEXCEPT { return _states[lipp::size( _states ) - 1]; }
 
-	virtual void make_error( int type ) LIPP_NOEXCEPT
-	{
-		if ( lipp::size( _states ) )
-		{
-			const auto &state = current_state();
-			_error = { type, state.sourceName, state.lineNumber };
-		}
-		else
-			_error = { type, string_view_t(), 0 };
-	}
-
-	error _error;
+	error_type _error = error_type::none;
 
 	unsigned long long _ifBits = 0;
 
@@ -368,13 +352,26 @@ template <class T> inline bool preprocessor<T>::include_file( string_view_t file
 	string_t fileContent;
 	if ( !read_file( buff, fileContent ) )
 	{
-		if ( _error.type == 0 )
-			make_error( error::read_failed );
+		if ( _error == error_type::none )
+			_error = error_type::read_failed;
 
 		return false;
 	}
 
 	return include_string( fileContent, buff );
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+template <class T> inline
+typename T::string_view_t preprocessor<T>::current_source_name() const LIPP_NOEXCEPT
+{
+	return T::size( _states ) ? current_state().sourceName : string_view_t();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+template <class T> inline int preprocessor<T>::current_line_number() const LIPP_NOEXCEPT
+{
+	return T::size( _states ) ? current_state().lineNumber : 0;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -388,7 +385,7 @@ template <class T> inline bool preprocessor<T>::read_file( string_view_t fileNam
 	}
 #endif
 
-	make_error( error::read_failed );
+	_error = error_type::read_failed;
 	return false;
 }
 
@@ -442,7 +439,7 @@ template <class T> inline bool preprocessor<T>::next_token( token &result, int f
 	{
 		if ( _ifBits )
 		{
-			make_error( error::mismatch_if );
+			_error = error_type::mismatch_if;
 			return false;
 		}
 
@@ -540,7 +537,7 @@ template <class T> inline bool preprocessor<T>::next_token( token &result, int f
 	{
 		if ( _insideCommentBlock )
 		{
-			make_error( error::unexpected_eof );
+			_error = error_type::unexpected_eof;
 			return false;
 		}
 
@@ -594,7 +591,7 @@ template <class T> inline bool preprocessor<T>::next_token( token &result, int f
 			{
 				if ( containsExponent )
 				{
-					make_error( error::syntax_error );
+					_error = error_type::syntax_error;
 					return false;
 				}
 
@@ -602,14 +599,14 @@ template <class T> inline bool preprocessor<T>::next_token( token &result, int f
 			}
 			else if ( ( ch == '+' || ch == '-' ) && ( lastChar != '.' && lastChar != 'e' ) )
 			{
-				make_error( error::syntax_error );
+				_error = error_type::syntax_error;
 				return false;
 			}
 			else if ( ch == '.' && ( strchr( numChars, lastChar ) || lastChar == '+' || lastChar == '-' ) )
 			{
 				if ( containsDot )
 				{
-					make_error( error::syntax_error );
+					_error = error_type::syntax_error;
 					return false;
 				}
 
@@ -619,7 +616,7 @@ template <class T> inline bool preprocessor<T>::next_token( token &result, int f
 			{
 				if ( !strchr( numChars, lastChar ) )
 				{
-					make_error( error::syntax_error );
+					_error = error_type::syntax_error;
 					return false;
 				}
 
@@ -653,7 +650,7 @@ template <class T> inline bool preprocessor<T>::next_token( token &result, int f
 
 		if ( tokenLength < 2 || src[tokenLength - 1] != ch )
 		{
-			make_error( error::invalid_string );
+			_error = error_type::invalid_string;
 			return false;
 		}
 
@@ -757,7 +754,7 @@ template <class T> inline typename preprocessor<T>::string_view_t preprocessor<T
 	if ( token t; next_token( t, true ) )
 		return t.type == token_type::identifier ? t.text : string_view_t();
 
-	make_error( error::expected_identifier );
+	_error = error_type::expected_identifier;
 	return string_view_t();
 }
 
@@ -773,7 +770,7 @@ template <class T> inline bool preprocessor<T>::concat_remaining_tokens( string_
 		result += string_t( t.text );
 	}
 
-	return _error.type == 0;
+	return _error == error_type::none;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -856,7 +853,7 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 			return next_token( result );
 		}
 
-		make_error( error::mismatch_if );
+		_error = error_type::mismatch_if;
 		return false;
 	}
 	else if ( directiveName == "endif" )
@@ -868,7 +865,7 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 			return next_token( result );
 		}
 
-		make_error( error::mismatch_if );
+		_error = error_type::mismatch_if;
 		return false;
 	}
 	else if ( directiveName == "print" )
@@ -880,7 +877,7 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 		token t;
 		if ( !next_token( t, stop_at_eols ) )
 		{
-			make_error( error::syntax_error );
+			_error = error_type::syntax_error;
 			return false;
 		}
 
@@ -900,23 +897,23 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 				fileName += t.text;
 			}
 
-			if ( _error.type != 0 )
+			if ( _error != error_type::none )
 				return false;
 			else if ( t.type != token_type::greater )
 			{
-				make_error( error::invalid_path );
+				_error = error_type::invalid_path;
 				return false;
 			}
 		}
 		else
 		{
-			make_error( error::invalid_path );
+			_error = error_type::invalid_path;
 			return false;
 		}
 
 		if ( !include_file( fileName, isSystemPath ) )
 		{
-			make_error( error::include_error );
+			_error = error_type::include_error;
 			return false;
 		}
 	}
