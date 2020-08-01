@@ -21,12 +21,6 @@
 
 namespace lipp {
 
-template <class T>
-inline size_t size( const T &container ) LIPP_NOEXCEPT { return container.size(); }
-
-template <class T>
-inline const T *data( const T &container ) LIPP_NOEXCEPT { return container.data(); }
-
 template <class T, class A>
 void clear( std::vector<T, A> &vec ) LIPP_NOEXCEPT { vec.clear(); }
 
@@ -89,9 +83,39 @@ enum class error_type
 	read_failed,
 };
 
+struct parsing_flags
+{
+	enum
+	{
+		stop_at_eols     = 0b0'0000'0001,
+		expand_macros    = 0b0'0000'0010,
+		unescape_strings = 0b0'0000'0100,
+
+		default_parsing_flags = expand_macros | unescape_strings
+	};
+};
+
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 inline size_t size( const char *str ) LIPP_NOEXCEPT { return str ? strlen( str ) : 0; }
+
+template <class T>
+inline size_t size( const T &container ) LIPP_NOEXCEPT { return container.size(); }
+
+template <class T>
+inline const T *data( const T &container ) LIPP_NOEXCEPT { return container.data(); }
+
+template <class T>
+inline auto substr( const T &str, size_t offset, size_t length ) LIPP_NOEXCEPT
+{ return str.substr( offset, length ); }
+
+template <class T>
+inline auto substr( const T &str, size_t offset ) LIPP_NOEXCEPT
+{ return str.substr( offset ); }
+
+template <class T>
+inline auto char_at( const T &str, size_t index ) LIPP_NOEXCEPT
+{ return index < lipp::size( str ) ? str[index] : 0; }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -151,19 +175,9 @@ public:
 		token_type type;
 		string_view_t whitespace;
 		string_view_t text;
-		double number = 0.0;
 	};
 
-	enum parsing_flags
-	{
-		stop_at_eols     = 0b0'0000'0001,
-		expand_macros    = 0b0'0000'0010,
-		unescape_strings = 0b0'0000'0100,
-
-		default_parsing_flags = expand_macros | unescape_strings
-	};
-
-	bool next_token( token &result, int flags = default_parsing_flags ) LIPP_NOEXCEPT;
+	bool next_token( token &result, int flags = parsing_flags::default_parsing_flags ) LIPP_NOEXCEPT;
 
 	string_t read_all() LIPP_NOEXCEPT;
 
@@ -172,14 +186,6 @@ protected:
 	static constexpr size_t expression_stack_size = 16;
 
 	static string_view_t trim( string_view_t s ) LIPP_NOEXCEPT;
-
-	static string_view_t substr( string_view_t sv, size_t offset, size_t length ) LIPP_NOEXCEPT;
-
-	static string_view_t substr( string_view_t sv, size_t offset ) LIPP_NOEXCEPT;
-
-	static char_t char_t_at( string_view_t s, size_t index ) LIPP_NOEXCEPT;
-
-	static char_t char_t_at( const string_t &s, size_t index ) LIPP_NOEXCEPT;
 
 	virtual bool read_file( string_view_t fileName, string_t &output ) LIPP_NOEXCEPT;
 
@@ -399,35 +405,7 @@ typename T::string_view_t preprocessor<T>::trim( string_view_t s ) LIPP_NOEXCEPT
 	while ( start < end && s[start] <= 32 ) ++start;
 	while ( end > start && s[end - 1] <= 32 ) --end;
 
-	return ( start < end ) ? substr( s, start, end - start ) : string_view_t();
-}
-
-//---------------------------------------------------------------------------------------------------------------------
-template <class T> inline
-typename T::string_view_t preprocessor<T>::substr( string_view_t sv, size_t offset, size_t length ) LIPP_NOEXCEPT
-{
-	return string_view_t( data( sv ) + offset, length );
-}
-
-//---------------------------------------------------------------------------------------------------------------------
-template <class T> inline
-typename T::string_view_t preprocessor<T>::substr( string_view_t sv, size_t offset ) LIPP_NOEXCEPT
-{
-	return string_view_t( data( sv ) + offset, lipp::size( sv ) - offset );
-}
-
-//---------------------------------------------------------------------------------------------------------------------
-template <class T> inline
-typename T::char_t preprocessor<T>::char_t_at( string_view_t s, size_t index ) LIPP_NOEXCEPT
-{
-	return index < lipp::size( s ) ? s[index] : 0;
-}
-
-//---------------------------------------------------------------------------------------------------------------------
-template <class T> inline
-typename T::char_t preprocessor<T>::char_t_at( const string_t &s, size_t index ) LIPP_NOEXCEPT
-{
-	return index < lipp::size( s ) ? s[index] : 0;
+	return ( start < end ) ? lipp::substr( s, start, end - start ) : string_view_t();
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -462,11 +440,11 @@ template <class T> inline bool preprocessor<T>::next_token( token &result, int f
 	// Consume as much whitespace as possible
 	while ( whitespaceLength < lipp::size( src ) )
 	{
-		auto ch = char_t_at( src, whitespaceLength );
+		auto ch = lipp::char_at( src, whitespaceLength );
 
 		if ( ch == '\n' )
 		{
-			if ( !!( flags & stop_at_eols ) )
+			if ( !!( flags & parsing_flags::stop_at_eols ) )
 			{
 				_insideCommentBlock = prevInsideCommentBlock;
 				return false;
@@ -477,7 +455,7 @@ template <class T> inline bool preprocessor<T>::next_token( token &result, int f
 
 		if ( _insideCommentBlock )
 		{
-			if ( ch == '*' && char_t_at( src, whitespaceLength + 1 ) == '/' )
+			if ( ch == '*' && lipp::char_at( src, whitespaceLength + 1 ) == '/' )
 			{
 				_insideCommentBlock = false;
 				++whitespaceLength;
@@ -490,7 +468,7 @@ template <class T> inline bool preprocessor<T>::next_token( token &result, int f
 		}
 		else if ( ch == '/' )
 		{
-			if ( auto nextCh = char_t_at( src, whitespaceLength + 1 ); nextCh == '/' )
+			if ( auto nextCh = lipp::char_at( src, whitespaceLength + 1 ); nextCh == '/' )
 			{
 				insideLineComment = true;
 				++whitespaceLength;
@@ -509,14 +487,14 @@ template <class T> inline bool preprocessor<T>::next_token( token &result, int f
 		++whitespaceLength;
 	}
 
-	if ( !!( flags & stop_at_eols ) && whitespaceLength == lipp::size( src ) )
+	if ( !!( flags & parsing_flags::stop_at_eols ) && whitespaceLength == lipp::size( src ) )
 	{
 		_insideCommentBlock = prevInsideCommentBlock;
 		return false;
 	}
 
-	result.whitespace = substr( src, 0, whitespaceLength );
-	src = substr( src, whitespaceLength );
+	result.whitespace = lipp::substr( src, 0, whitespaceLength );
+	src = lipp::substr( src, whitespaceLength );
 	state.cursor += whitespaceLength;
 
 	if ( state.emitLineDirective )
@@ -552,7 +530,7 @@ template <class T> inline bool preprocessor<T>::next_token( token &result, int f
 
 	size_t tokenLength = 1;
 
-	/**/ if ( auto ch = char_t_at( src, 0 ); ch == '#' )
+	/**/ if ( auto ch = lipp::char_at( src, 0 ); ch == '#' )
 	{
 		src = substr( src, 1 ); // Cut away '#'
 		state.cursor += 1;
@@ -565,7 +543,7 @@ template <class T> inline bool preprocessor<T>::next_token( token &result, int f
 
 		while ( tokenLength < lipp::size( src ) )
 		{
-			auto ch = char_t_at( src, tokenLength );
+			auto ch = lipp::char_at( src, tokenLength );
 			if ( !strchr( alphaChars, ch ) && !strchr( numChars, ch ) )
 				break;
 
@@ -573,7 +551,7 @@ template <class T> inline bool preprocessor<T>::next_token( token &result, int f
 		}
 	}
 	else if ( strchr( numChars, ch ) ||
-	          ( ( ch == '+' || ch == '-' ) && strchr( numDotChars, char_t_at( src, 1 ) ) ) )
+	          ( ( ch == '+' || ch == '-' ) && strchr( numDotChars, lipp::char_at( src, 1 ) ) ) )
 	{
 		char_t buff[char_t_buffer_size] = { };
 		buff[0] = ch;
@@ -631,8 +609,6 @@ template <class T> inline bool preprocessor<T>::next_token( token &result, int f
 			lastChar = ch;
 			++tokenLength;
 		}
-
-		result.number = atof( buff );
 	}
 	else if ( strchr( "'\"", ch ) )
 	{
@@ -654,7 +630,7 @@ template <class T> inline bool preprocessor<T>::next_token( token &result, int f
 			return false;
 		}
 
-		if ( flags & unescape_strings )
+		if ( flags & parsing_flags::unescape_strings )
 		{
 			_tempString = string_t();
 			result.text = _tempString;
@@ -668,7 +644,7 @@ template <class T> inline bool preprocessor<T>::next_token( token &result, int f
 	}
 	else if ( strchr( "!@#$%^&*()[]{}<>.,:;+-/*=|?~", ch ) )
 	{
-		auto secondChar = char_t_at( src, 1 );
+		auto secondChar = lipp::char_at( src, 1 );
 
 		/**/ if ( ch == '(' ) result.type = token_type::parent_left;
 		else if ( ch == ')' ) result.type = token_type::parent_right;
@@ -762,7 +738,7 @@ template <class T> inline typename preprocessor<T>::string_view_t preprocessor<T
 template <class T> inline bool preprocessor<T>::concat_remaining_tokens( string_t &result ) LIPP_NOEXCEPT
 {
 	token t;
-	while ( next_token( t, stop_at_eols | unescape_strings ) )
+	while ( next_token( t, parsing_flags::stop_at_eols | parsing_flags::unescape_strings ) )
 	{
 		if ( lipp::size( result ) )
 			result += " ";
@@ -777,8 +753,6 @@ template <class T> inline bool preprocessor<T>::concat_remaining_tokens( string_
 template <class T> inline bool preprocessor<T>::process_directive( token &result ) LIPP_NOEXCEPT
 {
 	auto &state = current_state();
-	auto &src = state.sourceView;
-
 	auto directiveName = next_identifier();
 	if ( !lipp::size( directiveName ) )
 		return false;
@@ -875,7 +849,7 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 	else if ( directiveName == "include" )
 	{
 		token t;
-		if ( !next_token( t, stop_at_eols ) )
+		if ( !next_token( t, parsing_flags::stop_at_eols ) )
 		{
 			_error = error_type::syntax_error;
 			return false;
@@ -888,7 +862,7 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 			fileName = t.text;
 		else if ( t.type == token_type::less )
 		{
-			while ( next_token( t, stop_at_eols ) )
+			while ( next_token( t, parsing_flags::stop_at_eols ) )
 			{
 				if ( t.type == token_type::greater || t.type == token_type::string )
 					break;
