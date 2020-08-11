@@ -187,11 +187,11 @@ protected:
 
 	static string_view_t trim( string_view_t s ) LIPP_NOEXCEPT;
 
+	bool parse_next_token( token &result, int flags = parsing_flags::default_parsing_flags ) LIPP_NOEXCEPT;
+
 	virtual bool read_file( string_view_t fileName, string_t &output ) LIPP_NOEXCEPT;
 
 	virtual int process_unknown_directive( string_view_t name ) LIPP_NOEXCEPT { return 1; }
-
-	string_view_t next_identifier() LIPP_NOEXCEPT;
 
 	bool concat_remaining_tokens( string_t &result ) LIPP_NOEXCEPT;
 
@@ -215,7 +215,6 @@ protected:
 		string_view_t cwd = string_view_t();
 
 		string_t source = string_t();
-		string_view_t sourceView = string_view_t();
 
 		size_t cursor = 0;
 
@@ -307,7 +306,6 @@ template <class T> inline bool preprocessor<T>::include_string( string_view_t sr
 	push_back( _states, {} );
 	auto &state = current_state();
 	state.source = src;
-	state.sourceView = state.source;
 	state.sourceName = sourceName;
 
 	// Resolve current working directory
@@ -411,6 +409,18 @@ typename T::string_view_t preprocessor<T>::trim( string_view_t s ) LIPP_NOEXCEPT
 //---------------------------------------------------------------------------------------------------------------------
 template <class T> inline bool preprocessor<T>::next_token( token &result, int flags ) LIPP_NOEXCEPT
 {
+	while ( parse_next_token( result, flags ) )
+	{
+		if ( is_inside_true_block() )
+			return true;
+	}
+
+	return false;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+template <class T> inline bool preprocessor<T>::parse_next_token( token &result, int flags ) LIPP_NOEXCEPT
+{
 	result = token();
 
 	while ( lipp::size( _states ) > 0 && _states[lipp::size( _states ) - 1].toBeRemoved )
@@ -431,7 +441,7 @@ template <class T> inline bool preprocessor<T>::next_token( token &result, int f
 		return false;
 
 	auto &state = current_state();
-	auto &src = state.sourceView;
+	auto src = lipp::substr( string_view_t( state.source ), state.cursor );
 
 	size_t whitespaceLength = 0;
 	bool insideLineComment = false;
@@ -692,10 +702,9 @@ template <class T> inline bool preprocessor<T>::next_token( token &result, int f
 	}
 
 	result.text = substr( src, 0, tokenLength );
-	src = substr( src, tokenLength );
 	state.cursor += tokenLength;
 
-	if ( result.type == token_type::identifier )
+	if ( result.type == token_type::identifier && !!( flags & parsing_flags::expand_macros ) )
 	{
 		if ( const auto *value = find_macro( result.text ); value != nullptr )
 		{
@@ -714,31 +723,18 @@ template <class T> inline typename preprocessor<T>::string_t preprocessor<T>::re
 	token t;
 	while ( next_token( t ) )
 	{
-		if ( is_inside_true_block() )
-		{
-			result += t.whitespace;
-			result += t.text;
-		}
+		result += t.whitespace;
+		result += t.text;
 	}
 
 	return result;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-template <class T> inline typename preprocessor<T>::string_view_t preprocessor<T>::next_identifier() LIPP_NOEXCEPT
-{
-	if ( token t; next_token( t, true ) )
-		return t.type == token_type::identifier ? t.text : string_view_t();
-
-	_error = error_type::expected_identifier;
-	return string_view_t();
-}
-
-//---------------------------------------------------------------------------------------------------------------------
 template <class T> inline bool preprocessor<T>::concat_remaining_tokens( string_t &result ) LIPP_NOEXCEPT
 {
 	token t;
-	while ( next_token( t, parsing_flags::stop_at_eols | parsing_flags::unescape_strings ) )
+	while ( parse_next_token( t, parsing_flags::stop_at_eols | parsing_flags::unescape_strings ) )
 	{
 		if ( lipp::size( result ) )
 			result += " ";
@@ -753,13 +749,23 @@ template <class T> inline bool preprocessor<T>::concat_remaining_tokens( string_
 template <class T> inline bool preprocessor<T>::process_directive( token &result ) LIPP_NOEXCEPT
 {
 	auto &state = current_state();
-	auto directiveName = next_identifier();
+
+	auto nextIdentifier = [this]( token & result )->string_view_t
+	{
+		if ( parse_next_token( result, 0 ) )
+			return result.type == token_type::identifier ? result.text : string_view_t();
+
+		_error = error_type::expected_identifier;
+		return string_view_t();
+	};
+
+	auto directiveName = nextIdentifier( result );
 	if ( !lipp::size( directiveName ) )
 		return false;
 
 	/**/ if ( directiveName == "define" )
 	{
-		if ( auto macroName = next_identifier(); lipp::size( macroName ) )
+		if ( auto macroName = nextIdentifier( result ); lipp::size( macroName ) )
 		{
 			string_t value;
 
@@ -781,7 +787,7 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 	}
 	else if ( directiveName == "undef" )
 	{
-		if ( auto macroName = next_identifier(); lipp::size( macroName ) )
+		if ( auto macroName = nextIdentifier( result ); lipp::size( macroName ) )
 		{
 			undef( macroName );
 
@@ -796,20 +802,20 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 	}
 	else if ( directiveName == "ifdef" )
 	{
-		if ( auto macroName = next_identifier(); lipp::size( macroName ) )
+		if ( auto macroName = nextIdentifier( result ); lipp::size( macroName ) )
 		{
 			_ifBits = ( _ifBits << 2ull ) | ( ( find_macro( macroName ) != nullptr ) ? 0b11ull : 0b10ull );
-			return next_token( result );
+			return parse_next_token( result );
 		}
 
 		return false;
 	}
 	else if ( directiveName == "ifndef" )
 	{
-		if ( auto macroName = next_identifier(); lipp::size( macroName ) )
+		if ( auto macroName = nextIdentifier( result ); lipp::size( macroName ) )
 		{
 			_ifBits = ( _ifBits << 2ull ) | ( ( find_macro( macroName ) == nullptr ) ? 0b11ull : 0b10ull );
-			return next_token( result );
+			return parse_next_token( result );
 		}
 
 		return false;
@@ -824,7 +830,7 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 		{
 			_ifBits ^= 1; // Flip first bit
 			state.emitLineDirective |= is_inside_true_block();
-			return next_token( result );
+			return parse_next_token( result );
 		}
 
 		_error = error_type::mismatch_if;
@@ -836,7 +842,7 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 		{
 			_ifBits >>= 2;
 			state.emitLineDirective |= is_inside_true_block();
-			return next_token( result );
+			return parse_next_token( result );
 		}
 
 		_error = error_type::mismatch_if;
@@ -849,7 +855,7 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 	else if ( directiveName == "include" )
 	{
 		token t;
-		if ( !next_token( t, parsing_flags::stop_at_eols ) )
+		if ( !parse_next_token( t, parsing_flags::stop_at_eols ) )
 		{
 			_error = error_type::syntax_error;
 			return false;
@@ -862,7 +868,7 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 			fileName = t.text;
 		else if ( t.type == token_type::less )
 		{
-			while ( next_token( t, parsing_flags::stop_at_eols ) )
+			while ( parse_next_token( t, parsing_flags::stop_at_eols ) )
 			{
 				if ( t.type == token_type::greater || t.type == token_type::string )
 					break;
