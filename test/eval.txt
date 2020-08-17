@@ -2,6 +2,8 @@
 #define Y 2
 #define Z 3
 
+#eval X < Y
+
 x = X
 y = Y
 z = Z

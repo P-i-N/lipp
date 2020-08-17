@@ -81,6 +81,8 @@ enum class error_type
 	mismatch_if,
 	include_error,
 	read_failed,
+	expression_too_complex,
+	invalid_expression,
 };
 
 struct parsing_flags
@@ -164,9 +166,9 @@ public:
 
 	bool is_inside_true_block() const LIPP_NOEXCEPT { return !( ( _ifBits + 1ull ) & _ifBits ); }
 
-	string_view_t current_source_name() const LIPP_NOEXCEPT;
+	string_view_t current_source_name() const LIPP_NOEXCEPT { return _sourceName; }
 
-	int current_line_number() const LIPP_NOEXCEPT;
+	int current_line_number() const LIPP_NOEXCEPT { return _lineNumber; }
 
 	error_type error() const LIPP_NOEXCEPT { return _error; }
 
@@ -211,39 +213,17 @@ protected:
 
 	macros_t _macros;
 
-	struct source_state
-	{
-		string_t sourceName = string_t();
-		string_view_t cwd = string_view_t();
-
-		string_t source = string_t();
-
-		size_t cursor = 0;
-
-		int lineNumber = 1;
-		bool toBeRemoved = false;
-		bool emitLineDirective = true;
-	};
-
-	using states_t = vector_t<source_state>;
-
-	states_t _states;
-
-	auto &current_state() LIPP_NOEXCEPT { return _states[lipp::size( _states ) - 1]; }
-
-	const auto &current_state() const LIPP_NOEXCEPT { return _states[lipp::size( _states ) - 1]; }
-
 	string_t _source = string_t();
 
 	string_t _sourceName = string_t();
 
-	string_t _cwd = string_t();
+	string_view_t _cwd = string_view_t();
 
 	string_t _tempString = string_t();
 
 	size_t _cursor = 0;
 
-	int _lineNumber = 1;
+	int _lineNumber = 0;
 
 	error_type _error = error_type::none;
 
@@ -302,11 +282,15 @@ template <class T> inline const typename T::char_t *preprocessor<T>::find_macro(
 template <class T> inline void preprocessor<T>::reset() LIPP_NOEXCEPT
 {
 	clear( _macros );
-	clear( _states );
+	_source = string_t();
+	_sourceName = string_t();
+	_cwd = string_view_t();
+	_tempString = string_t();
+	_cursor = 0;
+	_lineNumber = 0;
 	_error = error_type::none;
 	_ifBits = 0;
 	_insideCommentBlock = false;
-	_tempString = string_t();
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -315,21 +299,20 @@ template <class T> inline bool preprocessor<T>::include_string( string_view_t sr
 	if ( !lipp::size( src ) )
 		return true;
 
-	push_back( _states, {} );
-	auto &state = current_state();
-	state.source = src;
-	state.sourceName = sourceName;
+	char_t buff[char_t_buffer_size] = { };
 
-	// Resolve current working directory
-	{
-		size_t slashPos = lipp::size( sourceName ) - 1;
-		while ( slashPos < lipp::size( sourceName ) && sourceName[slashPos] != '/' && sourceName[slashPos] != '\\' )
-			--slashPos;
+	LIPP_SPRINTF( buff, "#line 1 \"%.*s\"\n", int( lipp::size( sourceName ) ), data( sourceName ) );
 
-		if ( slashPos < lipp::size( sourceName ) )
-			state.cwd = string_view_t( data( state.sourceName ), slashPos );
-	}
+	string_t source = buff;
+	source += src;
 
+	if ( source[lipp::size( source ) - 1] != '\n' )
+		source += "\n";
+
+	LIPP_SPRINTF( buff, "#line %d \"%s\"\n", _lineNumber + 1, data( _sourceName ) );
+	source += buff;
+
+	_source = substr( _source, 0, _cursor ) + source + substr( _source, _cursor );
 	return true;
 }
 
@@ -338,20 +321,15 @@ template <class T> inline bool preprocessor<T>::include_file( string_view_t file
 {
 	char_t buff[char_t_buffer_size] = { };
 
-	if ( !isSystemPath && lipp::size( _states ) )
+	if ( !isSystemPath && lipp::size( _cwd ) )
 	{
-		auto &state = current_state();
-		if ( lipp::size( state.cwd ) )
-		{
-			LIPP_SPRINTF( buff, "%.*s/%.*s",
-			              int( lipp::size( state.cwd ) ),
-			              data( state.cwd ),
-			              int( lipp::size( fileName ) ),
-			              data( fileName ) )
-		}
+		LIPP_SPRINTF( buff, "%.*s/%.*s",
+		              int( lipp::size( _cwd ) ),
+		              data( _cwd ),
+		              int( lipp::size( fileName ) ),
+		              data( fileName ) )
 	}
-
-	if ( !buff[0] )
+	else
 	{
 		LIPP_SPRINTF( buff, "%.*s",
 		              int( lipp::size( fileName ) ),
@@ -375,19 +353,6 @@ template <class T> inline bool preprocessor<T>::include_file( string_view_t file
 	}
 
 	return include_string( fileContent, buff );
-}
-
-//---------------------------------------------------------------------------------------------------------------------
-template <class T> inline
-typename T::string_view_t preprocessor<T>::current_source_name() const LIPP_NOEXCEPT
-{
-	return T::size( _states ) ? current_state().sourceName : string_view_t();
-}
-
-//---------------------------------------------------------------------------------------------------------------------
-template <class T> inline int preprocessor<T>::current_line_number() const LIPP_NOEXCEPT
-{
-	return T::size( _states ) ? current_state().lineNumber : 0;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -435,25 +400,7 @@ template <class T> inline bool preprocessor<T>::next_token( token &result, int f
 //---------------------------------------------------------------------------------------------------------------------
 template <class T> inline bool preprocessor<T>::parse_next_token( token &result, int flags ) LIPP_NOEXCEPT
 {
-	while ( lipp::size( _states ) > 0 && _states[lipp::size( _states ) - 1].toBeRemoved )
-	{
-		if ( _ifBits )
-		{
-			_error = error_type::mismatch_if;
-			return false;
-		}
-
-		pop_back( _states );
-
-		if ( lipp::size( _states ) )
-			current_state().emitLineDirective = true;
-	}
-
-	if ( lipp::size( _states ) == 0 )
-		return false;
-
-	auto &state = current_state();
-	auto src = lipp::substr( string_view_t( state.source ), state.cursor );
+	auto src = lipp::substr( string_view_t( _source ), _cursor );
 
 	size_t whitespaceLength = 0;
 	bool insideLineComment = false;
@@ -472,7 +419,7 @@ template <class T> inline bool preprocessor<T>::parse_next_token( token &result,
 				return false;
 			}
 
-			++state.lineNumber;
+			++_lineNumber;
 		}
 
 		if ( _insideCommentBlock )
@@ -517,21 +464,7 @@ template <class T> inline bool preprocessor<T>::parse_next_token( token &result,
 
 	result.whitespace = lipp::substr( src, 0, whitespaceLength );
 	src = lipp::substr( src, whitespaceLength );
-	state.cursor += whitespaceLength;
-
-	if ( state.emitLineDirective )
-	{
-		char_t buff[char_t_buffer_size] = { };
-
-		LIPP_SPRINTF( buff, "#line %d \"%s\"\n", state.lineNumber, data( state.sourceName ) );
-		_tempString = buff;
-
-		result.type = token_type::directive;
-		result.text = _tempString;
-
-		state.emitLineDirective = false;
-		return true;
-	}
+	_cursor += whitespaceLength;
 
 	if ( lipp::size( src ) == 0 )
 	{
@@ -541,9 +474,8 @@ template <class T> inline bool preprocessor<T>::parse_next_token( token &result,
 			return false;
 		}
 
-		state.toBeRemoved = true;
 		result.type = token_type::eof;
-		return true;
+		return false;
 	}
 
 	static constexpr char_t *alphaChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_$";
@@ -555,7 +487,7 @@ template <class T> inline bool preprocessor<T>::parse_next_token( token &result,
 	/**/ if ( auto ch = lipp::char_at( src, 0 ); ch == '#' )
 	{
 		src = substr( src, 1 ); // Cut away '#'
-		state.cursor += 1;
+		_cursor += 1;
 		result.type = token_type::directive;
 		return process_directive( result );
 	}
@@ -673,7 +605,7 @@ template <class T> inline bool preprocessor<T>::parse_next_token( token &result,
 		}
 
 		src = substr( src, tokenLength );
-		state.cursor += tokenLength;
+		_cursor += tokenLength;
 		return true;
 	}
 	else if ( strchr( "!@#$%^&*()[]{}<>.,:;+-/*=|?~", ch ) )
@@ -726,13 +658,19 @@ template <class T> inline bool preprocessor<T>::parse_next_token( token &result,
 	}
 
 	result.text = substr( src, 0, tokenLength );
-	state.cursor += tokenLength;
+	_cursor += tokenLength;
 
 	if ( result.type == token_type::identifier && !!( flags & parsing_flags::expand_macros ) )
 	{
 		if ( const auto *value = find_macro( result.text ); value != nullptr )
 		{
-			result.text = value;
+			auto cursorRewind = _cursor - tokenLength - whitespaceLength;
+
+			_source = substr( _source, cursorRewind, whitespaceLength ) + string_t( value ) + substr( _source, _cursor );
+			_cursor = 0;
+
+			result = token();
+			return parse_next_token( result, flags );
 		}
 	}
 
@@ -772,8 +710,6 @@ template <class T> inline bool preprocessor<T>::concat_remaining_tokens( string_
 //---------------------------------------------------------------------------------------------------------------------
 template <class T> inline bool preprocessor<T>::process_directive( token &result ) LIPP_NOEXCEPT
 {
-	auto &state = current_state();
-
 	auto nextIdentifier = [this]()->string_view_t
 	{
 		if ( token t; parse_next_token( t, 0 ) )
@@ -787,7 +723,44 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 	if ( !lipp::size( directiveName ) )
 		return false;
 
-	/**/ if ( directiveName == "define" )
+	/**/ if ( directiveName == "line" )
+	{
+		token t;
+		if ( !parse_next_token( t, 0 ) || t.type != token_type::number )
+		{
+			_error = error_type::syntax_error;
+			return false;
+		}
+
+		_lineNumber = atoi( data( t.text ) ) - 1;
+
+		if ( !parse_next_token( t, parsing_flags::stop_at_eols ) || t.type != token_type::string )
+		{
+			_error = error_type::syntax_error;
+			return false;
+		}
+
+		_sourceName = t.text;
+
+		// Resolve current working directory
+		{
+			size_t slashPos = lipp::size( _sourceName ) - 1;
+			while ( slashPos < lipp::size( _sourceName ) && _sourceName[slashPos] != '/' && _sourceName[slashPos] != '\\' )
+				--slashPos;
+
+			if ( slashPos < lipp::size( _sourceName ) )
+				_cwd = substr( string_view_t( _sourceName ), 0, slashPos );
+			else
+				_cwd = string_view_t();
+		}
+
+		char_t buff[char_t_buffer_size] = { };
+		LIPP_SPRINTF( buff, "#line %d \"%s\"", _lineNumber + 1, data( _sourceName ) );
+
+		result.text = buff;
+		return true;
+	}
+	else if ( directiveName == "define" )
 	{
 		if ( auto macroName = nextIdentifier(); lipp::size( macroName ) )
 		{
@@ -853,7 +826,6 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 		if ( _ifBits )
 		{
 			_ifBits ^= 1; // Flip first bit
-			state.emitLineDirective |= is_inside_true_block();
 			return parse_next_token( result );
 		}
 
@@ -865,16 +837,27 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 		if ( _ifBits )
 		{
 			_ifBits >>= 2;
-			state.emitLineDirective |= is_inside_true_block();
 			return parse_next_token( result );
 		}
 
 		_error = error_type::mismatch_if;
 		return false;
 	}
-	else if ( directiveName == "print" )
+	else if ( directiveName == "eval" )
 	{
-		evaluate_expression();
+		_tempString = result.whitespace;
+
+		auto evalResult = evaluate_expression();
+		if ( _error != error_type::none )
+			return false;
+
+		result.type = token_type::number;
+		result.whitespace = _tempString;
+
+		char_t buff[char_t_buffer_size] = { };
+		LIPP_SPRINTF( buff, "%d", evalResult );
+		result.text = buff;
+		return true;
 	}
 	else if ( directiveName == "include" )
 	{
@@ -918,14 +901,16 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 		// Remember already consumed whitespace from current source
 		_tempString = result.whitespace;
 
+		_source = substr( _source, _cursor );
+		_cursor = 0;
+
 		if ( !include_file( fileName, isSystemPath ) )
 		{
 			_error = error_type::include_error;
 			return false;
 		}
 
-		auto &state = current_state();
-		state.source = _tempString + state.source;
+		_source = _tempString + _source;
 
 		return parse_next_token( result );
 	}
@@ -941,10 +926,138 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 template <class T> inline int preprocessor<T>::evaluate_expression() LIPP_NOEXCEPT
 {
 	token_type operatorStack[expression_stack_size] = { };
-	token valueStack[expression_stack_size] = { };
-	size_t stackSize = 0;
+	size_t operatorStackSize = 0;
 
-	return 0;
+	int valueStack[expression_stack_size] = { };
+	size_t valueStackSize = 0;
+
+	auto popOperator = [&]()->bool
+	{
+		if ( !operatorStackSize || valueStackSize < 2 )
+			return false;
+
+		auto op = operatorStack[--operatorStackSize];
+		auto y = valueStack[--valueStackSize];
+		auto x = valueStack[--valueStackSize];
+		decltype( x ) z = 0;
+
+		/**/ if ( op == token_type::add )
+			z = x + y;
+		else if ( op == token_type::subtract )
+			z = x - y;
+		else if ( op == token_type::less )
+			z = ( x < y ) ? 1 : 0;
+		else if ( op == token_type::less_equal )
+			z = ( x <= y ) ? 1 : 0;
+		else if ( op == token_type::greater )
+			z = ( x > y ) ? 1 : 0;
+		else if ( op == token_type::greater_equal )
+			z = ( x >= y ) ? 1 : 0;
+		else if ( op == token_type::equal )
+			z = ( x == y ) ? 1 : 0;
+		else if ( op == token_type::not_equal )
+			z = ( x != y ) ? 1 : 0;
+		else
+			return false;
+
+		valueStack[valueStackSize++] = z;
+		return true;
+	};
+
+	token t;
+	while ( parse_next_token( t, parsing_flags::stop_at_eols | parsing_flags::expand_macros ) )
+	{
+		bool addOperator = false;
+
+		if ( t.type == token_type::number )
+		{
+			if ( valueStackSize == expression_stack_size )
+			{
+				set_error( error_type::expression_too_complex );
+				return 0;
+			}
+
+			valueStack[valueStackSize++] = atoi( data( t.text ) );
+		}
+		else if ( t.type == token_type::identifier && t.text == "defined" )
+		{
+			if ( !parse_next_token( t, parsing_flags::stop_at_eols ) || t.type != token_type::parent_left )
+			{
+				set_error( error_type::syntax_error );
+				return 0;
+			}
+
+			if ( !parse_next_token( t, parsing_flags::stop_at_eols ) || t.type != token_type::identifier )
+			{
+				set_error( error_type::expected_identifier );
+				return 0;
+			}
+
+			if ( valueStackSize == expression_stack_size )
+			{
+				set_error( error_type::expression_too_complex );
+				return 0;
+			}
+
+			if ( find_macro( t.text ) )
+				valueStack[valueStackSize++] = 1;
+			else
+				valueStack[valueStackSize++] = 0;
+
+			if ( !parse_next_token( t, parsing_flags::stop_at_eols ) || t.type != token_type::parent_right )
+			{
+				set_error( error_type::syntax_error );
+				return 0;
+			}
+		}
+		else if ( t.type == token_type::add )
+			addOperator = true;
+		else if ( t.type == token_type::subtract )
+			addOperator = true;
+		else if ( t.type == token_type::less )
+			addOperator = true;
+		else if ( t.type == token_type::less_equal )
+			addOperator = true;
+		else if ( t.type == token_type::greater )
+			addOperator = true;
+		else if ( t.type == token_type::greater_equal )
+			addOperator = true;
+		else if ( t.type == token_type::equal )
+			addOperator = true;
+		else
+		{
+			set_error( error_type::syntax_error );
+			return 0;
+		}
+
+		if ( addOperator )
+		{
+			if ( operatorStackSize == expression_stack_size )
+			{
+				set_error( error_type::expression_too_complex );
+				return 0;
+			}
+
+			operatorStack[operatorStackSize++] = t.type;
+		}
+	}
+
+	while ( operatorStackSize > 0 )
+	{
+		if ( !popOperator() )
+		{
+			set_error( error_type::invalid_expression );
+			return 0;
+		}
+	}
+
+	if ( valueStackSize != 1 )
+	{
+		set_error( error_type::invalid_expression );
+		return 0;
+	}
+
+	return valueStack[0];
 }
 
 } // namespace lipp

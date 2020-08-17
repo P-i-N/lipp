@@ -1,5 +1,5 @@
 Hello, world!
 -------------
 
-#include "dir/another_file.txt"
+/* What about comment before include? */ #include "dir/another_file.txt"
 xxx // Look! A commnent!
