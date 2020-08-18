@@ -49,24 +49,25 @@ enum class token_type
 	identifier,
 	string,
 	directive,
-	parent_left,
-	parent_right,
 	brace_left,
 	brace_right,
+	parent_left,
+	parent_right,
+	logical_not,
+	multiply,
+	divide,
+	modulo,
 	add,
 	subtract,
-	divide,
-	multiply,
-	assign,
-	logical_and,
-	logical_or,
+	less,
+	less_equal,
+	greater,
+	greater_equal,
 	equal,
 	not_equal,
-	less_equal,
-	greater_equal,
-	logical_not,
-	less,
-	greater,
+	logical_and,
+	logical_or,
+	assign,
 	semicolon,
 };
 
@@ -83,6 +84,8 @@ enum class error_type
 	read_failed,
 	expression_too_complex,
 	invalid_expression,
+	division_by_zero,
+	error_directive,
 };
 
 struct parsing_flags
@@ -118,6 +121,9 @@ inline auto substr( const T &str, size_t offset ) LIPP_NOEXCEPT
 template <class T>
 inline auto char_at( const T &str, size_t index ) LIPP_NOEXCEPT
 { return index < lipp::size( str ) ? str[index] : 0; }
+
+inline bool is_operator( token_type t ) LIPP_NOEXCEPT
+{ return t >= token_type::parent_left && t <= token_type::assign; }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -306,11 +312,14 @@ template <class T> inline bool preprocessor<T>::include_string( string_view_t sr
 	string_t source = buff;
 	source += src;
 
-	if ( source[lipp::size( source ) - 1] != '\n' )
-		source += "\n";
+	if ( lipp::size( _source ) )
+	{
+		if ( source[lipp::size( source ) - 1] != '\n' )
+			source += "\n";
 
-	LIPP_SPRINTF( buff, "#line %d \"%s\"\n", _lineNumber + 1, data( _sourceName ) );
-	source += buff;
+		LIPP_SPRINTF( buff, "#line %d \"%s\"\n", _lineNumber, data( _sourceName ) );
+		source += buff;
+	}
 
 	_source = substr( _source, 0, _cursor ) + source + substr( _source, _cursor );
 	return true;
@@ -347,7 +356,7 @@ template <class T> inline bool preprocessor<T>::include_file( string_view_t file
 	if ( !read_file( buff, fileContent ) )
 	{
 		if ( _error == error_type::none )
-			_error = error_type::read_failed;
+			set_error( error_type::read_failed );
 
 		return false;
 	}
@@ -366,7 +375,7 @@ template <class T> inline bool preprocessor<T>::read_file( string_view_t fileNam
 	}
 #endif
 
-	_error = error_type::read_failed;
+	set_error( error_type::read_failed );
 	return false;
 }
 
@@ -405,6 +414,8 @@ template <class T> inline bool preprocessor<T>::parse_next_token( token &result,
 	size_t whitespaceLength = 0;
 	bool insideLineComment = false;
 	bool prevInsideCommentBlock = _insideCommentBlock;
+	auto prevCursor = _cursor;
+	auto prevLineNumber = _lineNumber;
 
 	// Consume as much whitespace as possible
 	while ( whitespaceLength < lipp::size( src ) )
@@ -470,7 +481,7 @@ template <class T> inline bool preprocessor<T>::parse_next_token( token &result,
 	{
 		if ( _insideCommentBlock )
 		{
-			_error = error_type::unexpected_eof;
+			set_error( error_type::unexpected_eof );
 			return false;
 		}
 
@@ -504,8 +515,7 @@ template <class T> inline bool preprocessor<T>::parse_next_token( token &result,
 			++tokenLength;
 		}
 	}
-	else if ( strchr( numChars, ch ) ||
-	          ( ( ch == '+' || ch == '-' ) && strchr( numDotChars, lipp::char_at( src, 1 ) ) ) )
+	else if ( strchr( numChars, ch ) )
 	{
 		char_t buff[char_t_buffer_size] = { };
 		buff[0] = ch;
@@ -523,22 +533,22 @@ template <class T> inline bool preprocessor<T>::parse_next_token( token &result,
 			{
 				if ( containsExponent )
 				{
-					_error = error_type::syntax_error;
+					set_error( error_type::syntax_error );
 					return false;
 				}
 
 				containsExponent = true;
 			}
-			else if ( ( ch == '+' || ch == '-' ) && ( lastChar != '.' && lastChar != 'e' ) )
+			else if ( ch == '+' || ch == '-' )
 			{
-				_error = error_type::syntax_error;
-				return false;
+				if ( lastChar != 'e' )
+					break;
 			}
 			else if ( ch == '.' && ( strchr( numChars, lastChar ) || lastChar == '+' || lastChar == '-' ) )
 			{
 				if ( containsDot )
 				{
-					_error = error_type::syntax_error;
+					set_error( error_type::syntax_error );
 					return false;
 				}
 
@@ -546,9 +556,9 @@ template <class T> inline bool preprocessor<T>::parse_next_token( token &result,
 			}
 			else if ( ch == 'f' )
 			{
-				if ( !strchr( numChars, lastChar ) )
+				if ( !strchr( numDotChars, lastChar ) )
 				{
-					_error = error_type::syntax_error;
+					set_error( error_type::syntax_error );
 					return false;
 				}
 
@@ -580,7 +590,7 @@ template <class T> inline bool preprocessor<T>::parse_next_token( token &result,
 
 		if ( tokenLength < 2 || src[tokenLength - 1] != ch )
 		{
-			_error = error_type::invalid_string;
+			set_error( error_type::invalid_string );
 			return false;
 		}
 
@@ -664,10 +674,9 @@ template <class T> inline bool preprocessor<T>::parse_next_token( token &result,
 	{
 		if ( const auto *value = find_macro( result.text ); value != nullptr )
 		{
-			auto cursorRewind = _cursor - tokenLength - whitespaceLength;
-
-			_source = substr( _source, cursorRewind, whitespaceLength ) + string_t( value ) + substr( _source, _cursor );
+			_source = substr( _source, prevCursor, whitespaceLength ) + string_t( value ) + substr( _source, _cursor );
 			_cursor = 0;
+			_lineNumber = prevLineNumber;
 
 			result = token();
 			return parse_next_token( result, flags );
@@ -715,7 +724,7 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 		if ( token t; parse_next_token( t, 0 ) )
 			return t.type == token_type::identifier ? t.text : string_view_t();
 
-		_error = error_type::expected_identifier;
+		set_error( error_type::expected_identifier );
 		return string_view_t();
 	};
 
@@ -728,7 +737,7 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 		token t;
 		if ( !parse_next_token( t, 0 ) || t.type != token_type::number )
 		{
-			_error = error_type::syntax_error;
+			set_error( error_type::syntax_error );
 			return false;
 		}
 
@@ -736,7 +745,7 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 
 		if ( !parse_next_token( t, parsing_flags::stop_at_eols ) || t.type != token_type::string )
 		{
-			_error = error_type::syntax_error;
+			set_error( error_type::syntax_error );
 			return false;
 		}
 
@@ -757,7 +766,8 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 		char_t buff[char_t_buffer_size] = { };
 		LIPP_SPRINTF( buff, "#line %d \"%s\"", _lineNumber + 1, data( _sourceName ) );
 
-		result.text = buff;
+		_tempString = buff;
+		result.text = _tempString;
 		return true;
 	}
 	else if ( directiveName == "define" )
@@ -819,7 +829,12 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 	}
 	else if ( directiveName == "if" )
 	{
+		auto evalResult = evaluate_expression();
+		if ( _error != error_type::none )
+			return false;
 
+		_ifBits = ( _ifBits << 2ull ) | ( ( evalResult != 0 ) ? 0b11ull : 0b10ull );
+		return parse_next_token( result );
 	}
 	else if ( directiveName == "else" )
 	{
@@ -829,7 +844,7 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 			return parse_next_token( result );
 		}
 
-		_error = error_type::mismatch_if;
+		set_error( error_type::mismatch_if );
 		return false;
 	}
 	else if ( directiveName == "endif" )
@@ -840,7 +855,7 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 			return parse_next_token( result );
 		}
 
-		_error = error_type::mismatch_if;
+		set_error( error_type::mismatch_if );
 		return false;
 	}
 	else if ( directiveName == "eval" )
@@ -859,12 +874,22 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 		result.text = buff;
 		return true;
 	}
+	else if ( directiveName == "error" )
+	{
+		if ( is_inside_true_block() )
+		{
+			set_error( error_type::error_directive );
+			return false;
+		}
+
+		return parse_next_token( result );
+	}
 	else if ( directiveName == "include" )
 	{
 		token t;
 		if ( !parse_next_token( t, parsing_flags::stop_at_eols ) )
 		{
-			_error = error_type::syntax_error;
+			set_error( error_type::syntax_error );
 			return false;
 		}
 
@@ -888,13 +913,13 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 				return false;
 			else if ( t.type != token_type::greater )
 			{
-				_error = error_type::invalid_path;
+				set_error( error_type::invalid_path );
 				return false;
 			}
 		}
 		else
 		{
-			_error = error_type::invalid_path;
+			set_error( error_type::invalid_path );
 			return false;
 		}
 
@@ -906,9 +931,14 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 
 		if ( !include_file( fileName, isSystemPath ) )
 		{
-			_error = error_type::include_error;
+			set_error( error_type::include_error );
 			return false;
 		}
+
+		// Revert all counted lines
+		for ( size_t i = 0, S = lipp::size( _tempString ); i < S; ++i )
+			if ( _tempString[i] == '\n' )
+				--_lineNumber;
 
 		_source = _tempString + _source;
 
@@ -933,34 +963,72 @@ template <class T> inline int preprocessor<T>::evaluate_expression() LIPP_NOEXCE
 
 	auto popOperator = [&]()->bool
 	{
-		if ( !operatorStackSize || valueStackSize < 2 )
+		if ( !operatorStackSize || !valueStackSize )
+		{
+			set_error( error_type::invalid_expression );
 			return false;
+		}
 
 		auto op = operatorStack[--operatorStackSize];
 		auto y = valueStack[--valueStackSize];
-		auto x = valueStack[--valueStackSize];
-		decltype( x ) z = 0;
 
-		/**/ if ( op == token_type::add )
-			z = x + y;
-		else if ( op == token_type::subtract )
-			z = x - y;
-		else if ( op == token_type::less )
-			z = ( x < y ) ? 1 : 0;
-		else if ( op == token_type::less_equal )
-			z = ( x <= y ) ? 1 : 0;
-		else if ( op == token_type::greater )
-			z = ( x > y ) ? 1 : 0;
-		else if ( op == token_type::greater_equal )
-			z = ( x >= y ) ? 1 : 0;
-		else if ( op == token_type::equal )
-			z = ( x == y ) ? 1 : 0;
-		else if ( op == token_type::not_equal )
-			z = ( x != y ) ? 1 : 0;
+		if ( op != token_type::logical_not )
+		{
+			if ( !valueStackSize )
+			{
+				set_error( error_type::invalid_expression );
+				return false;
+			}
+
+			auto x = valueStack[--valueStackSize];
+			decltype( x ) z = 0;
+
+			/**/ if ( op == token_type::add )
+				z = x + y;
+			else if ( op == token_type::subtract )
+				z = x - y;
+			else if ( op == token_type::multiply )
+				z = x * y;
+			else if ( op == token_type::divide )
+			{
+				if ( y == 0 )
+				{
+					set_error( error_type::division_by_zero );
+					return false;
+				}
+
+				z = x / y;
+			}
+			else if ( op == token_type::less )
+				z = ( x < y ) ? 1 : 0;
+			else if ( op == token_type::less_equal )
+				z = ( x <= y ) ? 1 : 0;
+			else if ( op == token_type::greater )
+				z = ( x > y ) ? 1 : 0;
+			else if ( op == token_type::greater_equal )
+				z = ( x >= y ) ? 1 : 0;
+			else if ( op == token_type::equal )
+				z = ( x == y ) ? 1 : 0;
+			else if ( op == token_type::not_equal )
+				z = ( x != y ) ? 1 : 0;
+			else if ( op == token_type::logical_and )
+				z = ( x && y ) ? 1 : 0;
+			else if ( op == token_type::logical_or )
+				z = ( x || y ) ? 1 : 0;
+			else
+			{
+				set_error( error_type::invalid_expression );
+				return false;
+			}
+
+			valueStack[valueStackSize++] = z;
+			valueStack[valueStackSize] = 0;
+		}
 		else
-			return false;
+		{
+			valueStack[valueStackSize++] = ( y == 0 ) ? 1 : 0;
+		}
 
-		valueStack[valueStackSize++] = z;
 		return true;
 	};
 
@@ -1010,19 +1078,23 @@ template <class T> inline int preprocessor<T>::evaluate_expression() LIPP_NOEXCE
 				return 0;
 			}
 		}
-		else if ( t.type == token_type::add )
-			addOperator = true;
-		else if ( t.type == token_type::subtract )
-			addOperator = true;
-		else if ( t.type == token_type::less )
-			addOperator = true;
-		else if ( t.type == token_type::less_equal )
-			addOperator = true;
-		else if ( t.type == token_type::greater )
-			addOperator = true;
-		else if ( t.type == token_type::greater_equal )
-			addOperator = true;
-		else if ( t.type == token_type::equal )
+		else if ( t.type == token_type::parent_right )
+		{
+			while ( operatorStackSize > 0 && operatorStack[operatorStackSize - 1] != token_type::parent_left )
+			{
+				if ( !popOperator() )
+					return 0;
+			}
+
+			if ( !operatorStackSize || operatorStack[operatorStackSize - 1] != token_type::parent_left )
+			{
+				set_error( error_type::invalid_expression );
+				return 0;
+			}
+
+			--operatorStackSize;
+		}
+		else if ( t.type >= token_type::parent_left && t.type <= token_type::assign )
 			addOperator = true;
 		else
 		{
@@ -1032,6 +1104,16 @@ template <class T> inline int preprocessor<T>::evaluate_expression() LIPP_NOEXCE
 
 		if ( addOperator )
 		{
+			while ( operatorStackSize > 0 )
+			{
+				auto topOperator = operatorStack[operatorStackSize - 1];
+				if ( topOperator >= t.type || topOperator == token_type::parent_left )
+					break;
+
+				if ( !popOperator() )
+					return 0;
+			}
+
 			if ( operatorStackSize == expression_stack_size )
 			{
 				set_error( error_type::expression_too_complex );
@@ -1045,10 +1127,7 @@ template <class T> inline int preprocessor<T>::evaluate_expression() LIPP_NOEXCE
 	while ( operatorStackSize > 0 )
 	{
 		if ( !popOperator() )
-		{
-			set_error( error_type::invalid_expression );
 			return 0;
-		}
 	}
 
 	if ( valueStackSize != 1 )
