@@ -205,6 +205,8 @@ protected:
 
 	bool concat_remaining_tokens( string_t &result ) LIPP_NOEXCEPT;
 
+	bool return_line_directive( token &result ) LIPP_NOEXCEPT;
+
 	bool process_directive( token &result ) LIPP_NOEXCEPT;
 
 	int evaluate_expression() LIPP_NOEXCEPT;
@@ -226,6 +228,8 @@ protected:
 	string_view_t _cwd = string_view_t();
 
 	string_t _tempString = string_t();
+
+	string_t _whitespace = string_t();
 
 	size_t _cursor = 0;
 
@@ -717,6 +721,17 @@ template <class T> inline bool preprocessor<T>::concat_remaining_tokens( string_
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+template <class T> inline bool preprocessor<T>::return_line_directive( token &result ) LIPP_NOEXCEPT
+{
+	char_t buff[char_t_buffer_size] = { };
+	LIPP_SPRINTF( buff, "#line %d \"%s\"", _lineNumber + 1, data( _sourceName ) );
+
+	_tempString = buff;
+	result.text = _tempString;
+	return true;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 template <class T> inline bool preprocessor<T>::process_directive( token &result ) LIPP_NOEXCEPT
 {
 	auto nextIdentifier = [this]()->string_view_t
@@ -763,19 +778,13 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 				_cwd = string_view_t();
 		}
 
-		char_t buff[char_t_buffer_size] = { };
-		LIPP_SPRINTF( buff, "#line %d \"%s\"", _lineNumber + 1, data( _sourceName ) );
-
-		_tempString = buff;
-		result.text = _tempString;
-		return true;
+		return return_line_directive( result );
 	}
 	else if ( directiveName == "define" )
 	{
 		if ( auto macroName = nextIdentifier(); lipp::size( macroName ) )
 		{
 			string_t value;
-
 			if ( !concat_remaining_tokens( value ) )
 				return false;
 
@@ -811,7 +820,7 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 	{
 		if ( auto macroName = nextIdentifier(); lipp::size( macroName ) )
 		{
-			_ifBits = ( _ifBits << 2ull ) | ( ( find_macro( macroName ) != nullptr ) ? 0b11ull : 0b10ull );
+			_ifBits = ( _ifBits << 3ull ) | ( ( find_macro( macroName ) != nullptr ) ? 0b111ull : 0b110ull );
 			return parse_next_token( result );
 		}
 
@@ -821,7 +830,7 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 	{
 		if ( auto macroName = nextIdentifier(); lipp::size( macroName ) )
 		{
-			_ifBits = ( _ifBits << 2ull ) | ( ( find_macro( macroName ) == nullptr ) ? 0b11ull : 0b10ull );
+			_ifBits = ( _ifBits << 3ull ) | ( ( find_macro( macroName ) == nullptr ) ? 0b111ull : 0b110ull );
 			return parse_next_token( result );
 		}
 
@@ -829,11 +838,13 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 	}
 	else if ( directiveName == "if" )
 	{
+		_whitespace = result.whitespace;
+
 		auto evalResult = evaluate_expression();
 		if ( _error != error_type::none )
 			return false;
 
-		_ifBits = ( _ifBits << 2ull ) | ( ( evalResult != 0 ) ? 0b11ull : 0b10ull );
+		_ifBits = ( _ifBits << 3ull ) | ( ( evalResult != 0 ) ? 0b111ull : 0b110ull );
 		return parse_next_token( result );
 	}
 	else if ( directiveName == "else" )
@@ -841,7 +852,42 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 		if ( _ifBits )
 		{
 			_ifBits ^= 1; // Flip first bit
-			return parse_next_token( result );
+
+			if ( is_inside_true_block() )
+				return return_line_directive( result );
+			else
+				return parse_next_token( result );
+		}
+
+		set_error( error_type::mismatch_if );
+		return false;
+	}
+	else if ( directiveName == "elif" )
+	{
+		if ( _ifBits )
+		{
+			// Previous block was true, all upcomming "elif" blocks must be false
+			if ( is_inside_true_block() || ( _ifBits & 2ull ) == 0 )
+			{
+				string_t exprTokens;
+				if ( !concat_remaining_tokens( exprTokens ) )
+					return false;
+
+				// Clear first and second bit
+				_ifBits &= ~3ull;
+				return parse_next_token( result );
+			}
+			else
+			{
+				auto evalResult = evaluate_expression();
+				if ( _error != error_type::none )
+					return false;
+
+				if ( evalResult )
+					_ifBits |= 0b111ull;
+
+				return parse_next_token( result );
+			}
 		}
 
 		set_error( error_type::mismatch_if );
@@ -851,8 +897,12 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 	{
 		if ( _ifBits )
 		{
-			_ifBits >>= 2;
-			return parse_next_token( result );
+			_ifBits >>= 3;
+
+			if ( is_inside_true_block() )
+				return return_line_directive( result );
+			else
+				return parse_next_token( result );
 		}
 
 		set_error( error_type::mismatch_if );

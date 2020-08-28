@@ -10,10 +10,18 @@ z = Z
 
 Begin
 {
-#ifdef X
-X is defined.
+
+
+/* Hello! */
+#if X == 1
+Iks is X
+#elif (Y == 2)
+ypsilon is Y
+#elif Z == 3
+zet is Z
 #else
 X is NOT defined!
 #endif
 }
+
 End
