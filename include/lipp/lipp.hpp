@@ -88,15 +88,26 @@ enum class error_type
 	error_directive,
 };
 
+inline const char *to_string( error_type e ) LIPP_NOEXCEPT
+{
+	static constexpr char *errorStrings[] =
+	{
+		"none", "unexpected_eof", "syntax_error", "invalid_string", "invalid_path", "expected_identifier",
+		"mismatch_if", "include_error", "read_failed", "expression_too_complex", "invalid_expression",
+		"division_by_zero", "error_directive",
+	};
+
+	return errorStrings[size_t( e )];
+}
+
 struct parsing_flags
 {
 	enum
 	{
 		stop_at_eols     = 0b0'0000'0001,
 		expand_macros    = 0b0'0000'0010,
-		unescape_strings = 0b0'0000'0100,
 
-		default_parsing_flags = expand_macros | unescape_strings
+		default_parsing_flags = expand_macros
 	};
 };
 
@@ -124,6 +135,10 @@ inline auto char_at( const T &str, size_t index ) LIPP_NOEXCEPT
 
 inline bool is_operator( token_type t ) LIPP_NOEXCEPT
 { return t >= token_type::parent_left && t <= token_type::assign; }
+
+template <class T>
+inline auto remove_first_and_last( const T &str ) LIPP_NOEXCEPT
+{ return substr( str, 1, lipp::size( str ) - 2 ); }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -228,8 +243,6 @@ protected:
 	string_view_t _cwd = string_view_t();
 
 	string_t _tempString = string_t();
-
-	string_t _whitespace = string_t();
 
 	size_t _cursor = 0;
 
@@ -598,26 +611,7 @@ template <class T> inline bool preprocessor<T>::parse_next_token( token &result,
 			return false;
 		}
 
-		result.text = substr( src, 1, tokenLength - 2 );
-
-		if ( flags & parsing_flags::unescape_strings )
-		{
-			_tempString = string_t();
-
-			for ( size_t i = 0, S = lipp::size( result.text ); i < S; ++i )
-			{
-				if ( result.text[i] == '\\' )
-				{
-					// TODO
-					++i;
-				}
-				else
-					_tempString += result.text[i];
-			}
-
-			result.text = _tempString;
-		}
-
+		result.text = substr( src, 0, tokenLength );
 		src = substr( src, tokenLength );
 		_cursor += tokenLength;
 		return true;
@@ -709,7 +703,7 @@ template <class T> inline typename preprocessor<T>::string_t preprocessor<T>::re
 template <class T> inline bool preprocessor<T>::concat_remaining_tokens( string_t &result ) LIPP_NOEXCEPT
 {
 	token t;
-	while ( parse_next_token( t, parsing_flags::stop_at_eols | parsing_flags::unescape_strings ) )
+	while ( parse_next_token( t, parsing_flags::stop_at_eols ) )
 	{
 		if ( lipp::size( result ) )
 			result += " ";
@@ -764,7 +758,7 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 			return false;
 		}
 
-		_sourceName = t.text;
+		_sourceName = remove_first_and_last( t.text );
 
 		// Resolve current working directory
 		{
@@ -838,8 +832,6 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 	}
 	else if ( directiveName == "if" )
 	{
-		_whitespace = result.whitespace;
-
 		auto evalResult = evaluate_expression();
 		if ( _error != error_type::none )
 			return false;
@@ -947,7 +939,7 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 		string_t fileName;
 
 		if ( t.type == token_type::string )
-			fileName = t.text;
+			fileName = remove_first_and_last( t.text );
 		else if ( t.type == token_type::less )
 		{
 			while ( parse_next_token( t, parsing_flags::stop_at_eols ) )
