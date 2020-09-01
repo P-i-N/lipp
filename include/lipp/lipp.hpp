@@ -140,6 +140,34 @@ template <class T>
 inline auto remove_first_and_last( const T &str ) LIPP_NOEXCEPT
 { return substr( str, 1, lipp::size( str ) - 2 ); }
 
+template <class T>
+inline
+std::string escape( std::string_view str ) LIPP_NOEXCEPT
+{
+	std::string result = "";
+
+	for ( size_t i = 0, S = lipp::size( str ); i < S; ++i )
+	{
+		auto ch = str[i];
+		/**/ if ( ch == '\t' )
+			result += "\\t";
+		else if ( ch == '\r' )
+			result += "\\r";
+		else if ( ch == '\n' )
+			result += "\\n";
+		else if ( ch == '"' )
+			result += "\\\"";
+		else if ( ch == '\\' )
+			result += "\\";
+		else if ( ch == 0 )
+			result += "\\0";
+		else
+			result += ch;
+	}
+
+	return result;
+}
+
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 template <class Char, class String, class StringView, template <class> class Vector>
