@@ -45,6 +45,7 @@ enum class token_type
 {
 	unknown = 0,
 	eof,
+	end_of_line,
 	number,
 	identifier,
 	string,
@@ -104,7 +105,6 @@ struct parsing_flags
 {
 	enum
 	{
-		stop_at_eols     = 0b0'0000'0001,
 		expand_macros    = 0b0'0000'0010,
 
 		default_parsing_flags = expand_macros
@@ -244,12 +244,18 @@ protected:
 
 	string_t _tempString = string_t();
 
+	string_t _whitespace = string_t();
+
 	size_t _cursor = 0;
 
 	int _lineNumber = 0;
 
 	error_type _error = error_type::none;
 
+	// Every if-else nested level is represented by a bit triplet:
+	// - first bit represents block condition state
+	// - second bit marks, if additional #elif can be evaluated
+	// - third bit is always 1
 	unsigned long long _ifBits = 0;
 
 	bool _insideCommentBlock = false;
@@ -309,6 +315,7 @@ template <class T> inline void preprocessor<T>::reset() LIPP_NOEXCEPT
 	_sourceName = string_t();
 	_cwd = string_view_t();
 	_tempString = string_t();
+	_whitespace = string_t();
 	_cursor = 0;
 	_lineNumber = 0;
 	_error = error_type::none;
@@ -439,18 +446,17 @@ template <class T> inline bool preprocessor<T>::parse_next_token( token &result,
 	{
 		auto ch = lipp::char_at( src, whitespaceLength );
 
-		if ( ch == '\n' )
+		/**/ if ( ch == '\n' )
 		{
-			if ( !!( flags & parsing_flags::stop_at_eols ) )
-			{
-				_insideCommentBlock = prevInsideCommentBlock;
-				return false;
-			}
+			result.type = token_type::end_of_line;
+			result.whitespace = substr( src, 0, whitespaceLength );
+			result.text = "\n";
 
+			_cursor += whitespaceLength + 1;
 			++_lineNumber;
+			return true;
 		}
-
-		if ( _insideCommentBlock )
+		else if ( _insideCommentBlock )
 		{
 			if ( ch == '*' && lipp::char_at( src, whitespaceLength + 1 ) == '/' )
 			{
@@ -482,12 +488,6 @@ template <class T> inline bool preprocessor<T>::parse_next_token( token &result,
 			break;
 
 		++whitespaceLength;
-	}
-
-	if ( !!( flags & parsing_flags::stop_at_eols ) && whitespaceLength == lipp::size( src ) )
-	{
-		_insideCommentBlock = prevInsideCommentBlock;
-		return false;
 	}
 
 	result.whitespace = lipp::substr( src, 0, whitespaceLength );
@@ -703,8 +703,11 @@ template <class T> inline typename preprocessor<T>::string_t preprocessor<T>::re
 template <class T> inline bool preprocessor<T>::concat_remaining_tokens( string_t &result ) LIPP_NOEXCEPT
 {
 	token t;
-	while ( parse_next_token( t, parsing_flags::stop_at_eols ) )
+	while ( parse_next_token( t ) )
 	{
+		if ( t.type == token_type::end_of_line )
+			break;
+
 		if ( lipp::size( result ) )
 			result += " ";
 
@@ -752,7 +755,7 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 
 		_lineNumber = atoi( data( t.text ) ) - 1;
 
-		if ( !parse_next_token( t, parsing_flags::stop_at_eols ) || t.type != token_type::string )
+		if ( !parse_next_token( t ) || t.type != token_type::string )
 		{
 			set_error( error_type::syntax_error );
 			return false;
@@ -929,7 +932,7 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 	else if ( directiveName == "include" )
 	{
 		token t;
-		if ( !parse_next_token( t, parsing_flags::stop_at_eols ) )
+		if ( !parse_next_token( t ) )
 		{
 			set_error( error_type::syntax_error );
 			return false;
@@ -942,7 +945,7 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 			fileName = remove_first_and_last( t.text );
 		else if ( t.type == token_type::less )
 		{
-			while ( parse_next_token( t, parsing_flags::stop_at_eols ) )
+			while ( parse_next_token( t ) )
 			{
 				if ( t.type == token_type::greater || t.type == token_type::string )
 					break;
@@ -1075,11 +1078,15 @@ template <class T> inline int preprocessor<T>::evaluate_expression() LIPP_NOEXCE
 	};
 
 	token t;
-	while ( parse_next_token( t, parsing_flags::stop_at_eols | parsing_flags::expand_macros ) )
+	while ( parse_next_token( t ) )
 	{
 		bool addOperator = false;
 
-		if ( t.type == token_type::number )
+		if ( t.type == token_type::end_of_line )
+		{
+			break; // End of expression
+		}
+		else if ( t.type == token_type::number )
 		{
 			if ( valueStackSize == expression_stack_size )
 			{
@@ -1091,13 +1098,13 @@ template <class T> inline int preprocessor<T>::evaluate_expression() LIPP_NOEXCE
 		}
 		else if ( t.type == token_type::identifier && t.text == "defined" )
 		{
-			if ( !parse_next_token( t, parsing_flags::stop_at_eols ) || t.type != token_type::parent_left )
+			if ( !parse_next_token( t ) || t.type != token_type::parent_left )
 			{
 				set_error( error_type::syntax_error );
 				return 0;
 			}
 
-			if ( !parse_next_token( t, parsing_flags::stop_at_eols ) || t.type != token_type::identifier )
+			if ( !parse_next_token( t ) || t.type != token_type::identifier )
 			{
 				set_error( error_type::expected_identifier );
 				return 0;
@@ -1114,7 +1121,7 @@ template <class T> inline int preprocessor<T>::evaluate_expression() LIPP_NOEXCE
 			else
 				valueStack[valueStackSize++] = 0;
 
-			if ( !parse_next_token( t, parsing_flags::stop_at_eols ) || t.type != token_type::parent_right )
+			if ( !parse_next_token( t ) || t.type != token_type::parent_right )
 			{
 				set_error( error_type::syntax_error );
 				return 0;

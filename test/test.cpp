@@ -1,5 +1,7 @@
 #include <lipp/lipp.hpp>
 
+#line 1 "Test.cpp"
+
 //---------------------------------------------------------------------------------------------------------------------
 int main()
 {
@@ -7,7 +9,7 @@ int main()
 
 	lipp::preprocessor<traits> pp;
 
-	pp.include_file( "eval.txt" );
+	pp.include_file( "whitespace.txt" );
 
 	printf( "%s", pp.read_all().c_str() );
 	return 0;
