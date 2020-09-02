@@ -140,9 +140,8 @@ template <class T>
 inline auto remove_first_and_last( const T &str ) LIPP_NOEXCEPT
 { return substr( str, 1, lipp::size( str ) - 2 ); }
 
-template <class T>
-inline
-std::string escape( std::string_view str ) LIPP_NOEXCEPT
+template <class RT, class T>
+inline RT escape( const T &str ) LIPP_NOEXCEPT
 {
 	std::string result = "";
 
@@ -246,9 +245,9 @@ protected:
 
 	virtual int process_unknown_directive( string_view_t name ) LIPP_NOEXCEPT { return 1; }
 
-	bool concat_remaining_tokens( string_t &result ) LIPP_NOEXCEPT;
+	bool consume_until_end_of_line( string_t *result ) LIPP_NOEXCEPT;
 
-	bool return_line_directive( token &result ) LIPP_NOEXCEPT;
+	bool generate_line_directive( token &result ) LIPP_NOEXCEPT;
 
 	bool process_directive( token &result ) LIPP_NOEXCEPT;
 
@@ -728,7 +727,7 @@ template <class T> inline typename preprocessor<T>::string_t preprocessor<T>::re
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-template <class T> inline bool preprocessor<T>::concat_remaining_tokens( string_t &result ) LIPP_NOEXCEPT
+template <class T> inline bool preprocessor<T>::consume_until_end_of_line( string_t *result ) LIPP_NOEXCEPT
 {
 	token t;
 	while ( parse_next_token( t ) )
@@ -736,20 +735,23 @@ template <class T> inline bool preprocessor<T>::concat_remaining_tokens( string_
 		if ( t.type == token_type::end_of_line )
 			break;
 
-		if ( lipp::size( result ) )
-			result += " ";
+		if ( result )
+		{
+			if ( lipp::size( *result ) )
+				( *result ) += " ";
 
-		result += string_t( t.text );
+			( *result ) += string_t( t.text );
+		}
 	}
 
 	return _error == error_type::none;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-template <class T> inline bool preprocessor<T>::return_line_directive( token &result ) LIPP_NOEXCEPT
+template <class T> inline bool preprocessor<T>::generate_line_directive( token &result ) LIPP_NOEXCEPT
 {
 	char_t buff[char_t_buffer_size] = { };
-	LIPP_SPRINTF( buff, "#line %d \"%s\"", _lineNumber + 1, data( _sourceName ) );
+	LIPP_SPRINTF( buff, "#line %d \"%s\"\n", _lineNumber, data( _sourceName ) );
 
 	_tempString = buff;
 	result.text = _tempString;
@@ -803,14 +805,17 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 				_cwd = string_view_t();
 		}
 
-		return return_line_directive( result );
+		if ( !consume_until_end_of_line( nullptr ) )
+			return false;
+
+		return generate_line_directive( result );
 	}
 	else if ( directiveName == "define" )
 	{
 		if ( auto macroName = nextIdentifier(); lipp::size( macroName ) )
 		{
 			string_t value;
-			if ( !concat_remaining_tokens( value ) )
+			if ( !consume_until_end_of_line( &value ) )
 				return false;
 
 			define( macroName, value );
@@ -819,6 +824,7 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 			_tempString += macroName;
 			_tempString += " ";
 			_tempString += value;
+			_tempString += "\n";
 
 			result.text = _tempString;
 			return true;
@@ -830,10 +836,14 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 	{
 		if ( auto macroName = nextIdentifier(); lipp::size( macroName ) )
 		{
+			if ( !consume_until_end_of_line( nullptr ) )
+				return false;
+
 			undef( macroName );
 
 			_tempString = "#undef ";
 			_tempString += macroName;
+			_tempString += "\n";
 
 			result.text = _tempString;
 			return true;
@@ -877,7 +887,7 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 			_ifBits ^= 1; // Flip first bit
 
 			if ( is_inside_true_block() )
-				return return_line_directive( result );
+				return generate_line_directive( result );
 			else
 				return parse_next_token( result );
 		}
@@ -892,8 +902,7 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 			// Previous block was true, all upcomming "elif" blocks must be false
 			if ( is_inside_true_block() || ( _ifBits & 2ull ) == 0 )
 			{
-				string_t exprTokens;
-				if ( !concat_remaining_tokens( exprTokens ) )
+				if ( !consume_until_end_of_line( nullptr ) )
 					return false;
 
 				// Clear first and second bit
@@ -923,7 +932,7 @@ template <class T> inline bool preprocessor<T>::process_directive( token &result
 			_ifBits >>= 3;
 
 			if ( is_inside_true_block() )
-				return return_line_directive( result );
+				return generate_line_directive( result );
 			else
 				return parse_next_token( result );
 		}

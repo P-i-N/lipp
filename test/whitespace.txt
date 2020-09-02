@@ -1,2 +1,5 @@
-/* This should be in a whitespace token part */
+/* This should
+be in a whitespace
+token part */
+
 #define X 1
