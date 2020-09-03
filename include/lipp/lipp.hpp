@@ -44,7 +44,6 @@ namespace lipp {
 enum class token_type
 {
 	unknown = 0,
-	eof,
 	end_of_line,
 	number,
 	identifier,
@@ -529,7 +528,7 @@ template <class T> inline bool preprocessor<T>::parse_next_token( token &result,
 			return false;
 		}
 
-		result.type = token_type::eof;
+		result.type = token_type::end_of_line;
 		return false;
 	}
 
